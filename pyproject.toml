@@ -13,14 +13,16 @@ dependencies = [
     "numpy>=1.26",
     "omegaconf>=2.3",
     "pandas>=2.2",
+    "pyarrow>=15.0",
     "pydantic>=2.6",
     "requests>=2.31",
-    "scapy>=2.5",
     "scikit-learn>=1.4",
     "scipy>=1.11",
     "torch>=2.11.0",
     "torchvision>=0.26.0",
     "tqdm>=4.66",
+    "webdataset>=0.2",
+    "xxhash>=3.4",
 ]
 
 [build-system]
@@ -41,6 +43,9 @@ torchvision = { index = "pytorch-cu130" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "slow: end-to-end tests >1s (ETL pipeline, scapy-built large pcaps); skip with `-m 'not slow'` during dev",
+]
 
 # --- ruff ---
 [tool.ruff]
@@ -63,4 +68,5 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.3",
+    "scapy>=2.5",
 ]

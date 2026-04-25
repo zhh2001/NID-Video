@@ -40,7 +40,7 @@ cd nid-video
 # 2. Install dependencies (creates .venv automatically)
 uv sync
 
-# 3. Verify the toolchain (config + logger + CUDA matmul)
+# 3. Verify the toolchain (config + logger + CUDA matmul + ETL pipeline)
 uv run pytest tests/ -v
 
 # 4. (Optional, ~30 GB) Download the CIC-IDS 2017 Tue/Wed/Fri subset.
@@ -49,14 +49,32 @@ uv run pytest tests/ -v
 #    and copy the `Token` cookie value, then:
 uv run python scripts/download_cicids2017.py --dry-run
 uv run python scripts/download_cicids2017.py --cookie-token "$CIC_TOKEN" --yes
+
+# 5. (After step 4) Run ETL: pcap -> (T,C,H,W) webdataset shards.
+#    The CSV ZIPs from step 4 must be unpacked first (TrafficLabelling/*.csv).
+#    Use --num-workers 3 to dispatch one worker per pcap.
+uv run python scripts/run_etl.py \
+    --pcap-dir data/raw/cicids2017/PCAPs \
+    --label-dir data/raw/cicids2017/TrafficLabelling \
+    --output-dir data/processed/cicids2017 \
+    --csv-dayfirst \
+    --num-workers 3
 ```
 
-After step 3 you should see `4 passed`. After step 4 you'll have:
+After step 3 you should see `72 passed`. After step 4 you'll have:
 
 ```
 data/raw/cicids2017/
 ├── PCAPs/{Tuesday,Wednesday,Friday}-*.pcap
 └── CSVs/{GeneratedLabelledFlows,MachineLearningCSV}.zip
+```
+
+After step 5 (~13 min wall clock with 3 workers; see [docs/etl_performance.md](docs/etl_performance.md)):
+
+```
+data/processed/cicids2017/
+├── <pcap_stem>/shards/shard-NNNNNN.tar    # ~150 KB/sample, ~1000/shard
+└── <pcap_stem>/manifest.parquet            # per-shard label distribution
 ```
 
 ---
@@ -69,19 +87,27 @@ nid-video/
 │   └── base.yaml
 ├── data/
 │   ├── raw/             # pcaps land here (gitignored)
-│   └── processed/       # ETL output tensors (gitignored)
+│   └── processed/       # ETL output webdataset shards (gitignored)
 ├── outputs/             # training logs + checkpoints (gitignored)
+├── docs/
+│   └── etl_performance.md
 ├── scripts/
-│   └── download_cicids2017.py
+│   ├── download_cicids2017.py
+│   └── run_etl.py
 ├── src/nid_video/
-│   ├── data/            # ETL: pcap → (T,C,H,W) tensor   (M2)
+│   ├── data/            # ETL stages (M2)
+│   │   ├── pcap_parser.py     # dpkt-backed PacketStream
+│   │   ├── windowing.py       # SlidingWindow → Window/Frame
+│   │   ├── channels.py        # encode_window → (T,C,H,W) tensor
+│   │   ├── ip_clustering.py   # per-window k-means on source IPs
+│   │   ├── labeling.py        # CIC TrafficLabelling alignment
+│   │   └── etl_pipeline.py    # run_etl + manifest
 │   ├── models/          # VideoMAE backbone + heads      (M3)
 │   ├── trainer/         # training loop + eval            (M4)
 │   └── utils/
 │       ├── config.py    # OmegaConf load + pydantic validate
 │       └── logger.py    # loguru wrapper
-└── tests/
-    └── test_smoke.py    # config / logger / CUDA matmul
+└── tests/               # 72 tests; mark `slow` for end-to-end ETL (~10s)
 ```
 
 ---
@@ -108,8 +134,8 @@ cfg = load_config("configs/base.yaml")
 | | | |
 |---|---|---|
 | M1 | Project skeleton + dependencies + config + smoke tests + CIC download script | ✅ done |
-| M2 | ETL: pcap → `(T, C, H, W)` tensor (k-means IP buckets, port columns, motion channels) | ⏳ next |
-| M3 | VideoMAE-Small backbone integration + tube-patch tokenizer | – |
+| M2 | ETL: pcap → `(T,C,H,W)` shards (per-window k-means, motion channels, webdataset) | ✅ done |
+| M3 | VideoMAE-Small backbone integration + tube-patch tokenizer | ⏳ next |
 | M4 | Training loop (FP16 + 8-bit AdamW + grad checkpointing) on 8 GB VRAM | – |
 | M5 | Evaluation: in-domain + cross-dataset transfer | – |
 | M6 | Ablations + paper figures | – |
@@ -119,8 +145,17 @@ cfg = load_config("configs/base.yaml")
 ## Development
 
 ```bash
-uv run pytest tests/ -v          # run all tests
+# Tests come in two tiers:
+uv run pytest -m "not slow"      # fast (≈3s, dev-iteration loop)
+uv run pytest                    # full (≈8s, includes end-to-end ETL — pre-commit / CI)
+
 uv run ruff check .              # lint
 uv run ruff format .             # format
 uv run mypy src/                 # type-check
 ```
+
+The `slow` marker tags end-to-end ETL tests that build synthetic pcaps via
+scapy and run the full pipeline; see `pyproject.toml` for the registration.
+
+For perf characteristics and projections to the full CIC-IDS subset, see
+[`docs/etl_performance.md`](docs/etl_performance.md).
