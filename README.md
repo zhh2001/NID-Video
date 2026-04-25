@@ -59,9 +59,22 @@ uv run python scripts/run_etl.py \
     --output-dir data/processed/cicids2017 \
     --csv-dayfirst \
     --num-workers 3
+
+# 6. Train the M3 main method (VideoMAE-Small adapted for NID).
+#    Real training:
+uv run python scripts/train.py \
+    --config configs/training_perf.yaml \
+    --shard-pattern "data/processed/cicids2017/*/shards/shard-*.tar" \
+    --num-epochs 20
+
+# Smoke test (FP32 + small batch, no real GPU pressure):
+uv run python scripts/train.py \
+    --config configs/base.yaml \
+    --shard-pattern "data/processed/cicids2017/*/shards/shard-*.tar" \
+    --debug --max-steps 20
 ```
 
-After step 3 you should see `72 passed`. After step 4 you'll have:
+After step 3 you should see `105 passed, 1 skipped`. After step 4 you'll have:
 
 ```
 data/raw/cicids2017/
@@ -77,37 +90,49 @@ data/processed/cicids2017/
 └── <pcap_stem>/manifest.parquet            # per-shard label distribution
 ```
 
+After step 6 (one epoch ~30–46 min on real CIC subset; see [docs/m3_perf.md](docs/m3_perf.md)):
+
+```
+outputs/run_<timestamp>/ckpt/epoch_{N}.safetensors    # ~82 MB / epoch
+```
+
 ---
 
 ## Project layout
 
 ```
 nid-video/
-├── configs/             # OmegaConf YAML configs (validated by pydantic)
-│   └── base.yaml
+├── configs/             # OmegaConf YAML configs (validated by pydantic; supports `extends:`)
+│   ├── base.yaml              # CI / smoke / sanity baseline (B=2, accum=16)
+│   └── training_perf.yaml     # production throughput (B=32, accum=1, workers=2)
 ├── data/
 │   ├── raw/             # pcaps land here (gitignored)
 │   └── processed/       # ETL output webdataset shards (gitignored)
 ├── outputs/             # training logs + checkpoints (gitignored)
 ├── docs/
-│   └── etl_performance.md
+│   ├── etl_performance.md     # M2 ETL throughput
+│   └── m3_perf.md             # M3 memory + throughput sweep
 ├── scripts/
 │   ├── download_cicids2017.py
-│   └── run_etl.py
+│   ├── run_etl.py
+│   └── train.py
 ├── src/nid_video/
-│   ├── data/            # ETL stages (M2)
+│   ├── data/            # ETL stages + dataset adapter
 │   │   ├── pcap_parser.py     # dpkt-backed PacketStream
 │   │   ├── windowing.py       # SlidingWindow → Window/Frame
 │   │   ├── channels.py        # encode_window → (T,C,H,W) tensor
 │   │   ├── ip_clustering.py   # per-window k-means on source IPs
 │   │   ├── labeling.py        # CIC TrafficLabelling alignment
-│   │   └── etl_pipeline.py    # run_etl + manifest
-│   ├── models/          # VideoMAE backbone + heads      (M3)
-│   ├── trainer/         # training loop + eval            (M4)
+│   │   ├── etl_pipeline.py    # run_etl + manifest
+│   │   └── dataset.py         # NidShardDataset (webdataset)            (M3)
+│   ├── models/
+│   │   └── videomae_nid.py    # VideoMAE-S adapter (3-ch→6-ch, 16→8 patch) (M3)
+│   ├── trainer/
+│   │   └── trainer.py         # FP16 AMP + 8-bit AdamW + grad accum     (M3)
 │   └── utils/
-│       ├── config.py    # OmegaConf load + pydantic validate
+│       ├── config.py    # OmegaConf load + extends + pydantic validate
 │       └── logger.py    # loguru wrapper
-└── tests/               # 72 tests; mark `slow` for end-to-end ETL (~10s)
+└── tests/               # 106 tests in two tiers: -m "not slow" (fast, ~17s) / full (~24s)
 ```
 
 ---
@@ -135,7 +160,8 @@ cfg = load_config("configs/base.yaml")
 |---|---|---|
 | M1 | Project skeleton + dependencies + config + smoke tests + CIC download script | ✅ done |
 | M2 | ETL: pcap → `(T,C,H,W)` shards (per-window k-means, motion channels, webdataset) | ✅ done |
-| M3 | VideoMAE-Small backbone integration + tube-patch tokenizer | ⏳ next |
+| M3 | VideoMAE-S adaptation + dataset/dataloader + minimal trainer (FP16+AMP+8bit AdamW), 1-epoch smoke | ✅ done |
+| M4 | Multi-scale + lr scheduler + resume + eval | ⏳ next |
 | M4 | Training loop (FP16 + 8-bit AdamW + grad checkpointing) on 8 GB VRAM | – |
 | M5 | Evaluation: in-domain + cross-dataset transfer | – |
 | M6 | Ablations + paper figures | – |
@@ -146,8 +172,8 @@ cfg = load_config("configs/base.yaml")
 
 ```bash
 # Tests come in two tiers:
-uv run pytest -m "not slow"      # fast (≈3s, dev-iteration loop)
-uv run pytest                    # full (≈8s, includes end-to-end ETL — pre-commit / CI)
+uv run pytest -m "not slow"      # fast (≈17s, dev-iteration loop; 95 tests)
+uv run pytest                    # full (≈24s, +10 slow tests for ETL/HF/trainer; pre-commit / CI)
 
 uv run ruff check .              # lint
 uv run ruff format .             # format

@@ -1,0 +1,14 @@
+# Throughput-optimized training config.
+#
+# Inherits everything from base.yaml; overrides only the training stack
+# to drop the small-batch / high-accumulation strategy that was sized for
+# an over-conservative 8 GB-VRAM model.
+#
+# See docs/m3_perf.md for the empirical numbers behind these choices.
+# Use this for real M4+ training; keep base.yaml for CI / smoke tests.
+extends: base.yaml
+
+training:
+  batch_size: 32         # was 2 — sits at GPU compute saturation point (~200 sps)
+  grad_accumulation: 1   # was 16 — effective batch unchanged at 32, eliminates 16x overhead
+  num_workers: 2         # was 0 — DataLoader prefetch hides shard IO latency

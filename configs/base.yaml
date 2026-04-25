@@ -25,6 +25,7 @@ training:
   optimizer: "adamw_8bit"      # bitsandbytes 8-bit AdamW
   precision: "fp16"
   gradient_checkpointing: true
+  num_workers: 0               # DataLoader worker count; 0 = synchronous (use training_perf.yaml for production)
 
 logging:
   output_dir: "outputs"

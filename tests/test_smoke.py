@@ -47,6 +47,34 @@ def test_config_loads_with_canonical_shape() -> None:
     assert cfg.training.optimizer == "adamw_8bit"
     assert cfg.training.precision == "fp16"
     assert cfg.training.gradient_checkpointing is True
+    assert cfg.training.num_workers == 0
+
+
+def test_training_perf_config_inherits_and_overrides() -> None:
+    """training_perf.yaml extends base.yaml; only training fields differ."""
+    cfg = load_config(project_root() / "configs" / "training_perf.yaml")
+
+    # Inherited from base
+    assert cfg.data.num_frames == 16
+    assert cfg.data.num_channels == 6
+    assert cfg.model.backbone == "videomae_small"
+    assert cfg.training.optimizer == "adamw_8bit"
+    assert cfg.training.precision == "fp16"
+    assert cfg.training.gradient_checkpointing is True
+
+    # Overridden by training_perf
+    assert cfg.training.batch_size == 32
+    assert cfg.training.grad_accumulation == 1
+    assert cfg.training.num_workers == 2
+
+
+def test_load_config_extends_missing_parent_raises(tmp_path) -> None:
+    """A `extends:` pointing at a missing file must fail loudly."""
+    bad = tmp_path / "child.yaml"
+    bad.write_text("extends: nonexistent.yaml\ndata:\n  delta_t_ms: 100\n")
+    import pytest as _pytest
+    with _pytest.raises(FileNotFoundError):
+        load_config(bad)
 
 
 # --- logger -----------------------------------------------------------------

@@ -62,6 +62,7 @@ class TrainingConfig(BaseModel):
     optimizer: Literal["adamw_8bit", "adamw"] = "adamw_8bit"
     precision: Literal["fp16", "bf16", "fp32"] = "fp16"
     gradient_checkpointing: bool = True
+    num_workers: int = Field(default=0, ge=0)
 
 
 class LoggingConfig(BaseModel):
@@ -83,13 +84,35 @@ class NIDVideoConfig(BaseModel):
 
 
 def load_config(path: str | Path) -> NIDVideoConfig:
-    """Load a YAML config file and validate it against the pydantic schema."""
+    """Load a YAML config file and validate it against the pydantic schema.
+
+    Supports a top-level ``extends: <relative-or-absolute-path>`` field for
+    composition: the parent file is loaded first, then the child overrides
+    are merged on top. ``extends`` may itself extend another file (recursive).
+    """
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Config file not found: {p}")
-    raw = OmegaConf.load(p)
+    raw = _load_with_extends(p)
     plain = OmegaConf.to_container(raw, resolve=True)
     return NIDVideoConfig.model_validate(plain)
+
+
+def _load_with_extends(path: Path):
+    """Load a YAML, recursively resolving any top-level ``extends`` chain."""
+    raw = OmegaConf.load(path)
+    if "extends" not in raw:
+        return raw
+    parent_path = Path(str(raw.extends))
+    if not parent_path.is_absolute():
+        parent_path = path.parent / parent_path
+    if not parent_path.is_file():
+        raise FileNotFoundError(
+            f"{path}: 'extends: {raw.extends}' resolves to {parent_path} which does not exist"
+        )
+    parent = _load_with_extends(parent_path)
+    del raw["extends"]
+    return OmegaConf.merge(parent, raw)
 
 
 def project_root() -> Path:
