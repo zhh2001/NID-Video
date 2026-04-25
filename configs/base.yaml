@@ -1,0 +1,31 @@
+# Base configuration for NID-Video.
+# Idea.md references in inline comments point to the design rationale.
+
+data:
+  raw_pcap_dir: "data/raw"
+  processed_dir: "data/processed"
+  delta_t_ms: 100         # Idea.md §3.2 — 100ms per frame
+  num_frames: 16          # T
+  num_ip_buckets: 32      # H — k-means cluster of source IPs by behavior
+  num_port_buckets: 64    # W — 16 hot-port columns + 48 log2(port) bucket columns
+  num_channels: 6         # C — see config.py for channel semantics
+  window_overlap: 0.5     # 50% overlap sliding window
+
+model:
+  backbone: "videomae_small"   # Idea.md §3.4 — ViT-S/16 backbone
+  pretrained: "kinetics400"    # alt: "ssv2"
+  tube_patch: [2, 8, 8]        # (T_p, H_p, W_p) -> 256 tokens per sample
+
+training:
+  batch_size: 2
+  grad_accumulation: 16        # Idea.md §4.1 — effective batch = 32
+  num_epochs: 20
+  lr: 1.5e-4
+  weight_decay: 0.05
+  optimizer: "adamw_8bit"      # bitsandbytes 8-bit AdamW
+  precision: "fp16"
+  gradient_checkpointing: true
+
+logging:
+  output_dir: "outputs"
+  log_level: "INFO"

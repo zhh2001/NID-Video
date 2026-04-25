@@ -1,0 +1,48 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.python-version.local
+
+# Editor/OS junk
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Project artifacts (never commit data or model weights)
+data/raw/**
+data/processed/**
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+outputs/**
+!outputs/.gitkeep
+
+# Binary blobs
+*.pcap
+*.pcapng
+*.npz
+*.npy
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+
+# Logs / caches
+*.log
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# uv lock is committed (intentional)
