@@ -36,6 +36,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--samples-per-shard", type=int, default=1000)
     p.add_argument("--csv-dayfirst", action="store_true",
                    help="Required for raw CIC-IDS-2017 (timestamps are DD/MM/YYYY).")
+    p.add_argument("--csv-tz", default="America/Halifax",
+                   help="IANA tz of CSV wall-clock timestamps. Default "
+                        "America/Halifax matches CIC-IDS-2017's site.")
     return p.parse_args(argv)
 
 
@@ -48,6 +51,7 @@ def _process_one_pcap(
     samples_per_shard: int,
     limit_windows: int | None,
     csv_dayfirst: bool,
+    csv_tz: str,
 ) -> EtlStats:
     sub_out = output_dir / pcap.stem
     return run_etl(
@@ -58,6 +62,7 @@ def _process_one_pcap(
         samples_per_shard=samples_per_shard,
         limit_windows=limit_windows,
         csv_dayfirst=csv_dayfirst,
+        csv_tz=csv_tz,
     )
 
 
@@ -90,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             samples_per_shard=args.samples_per_shard,
             limit_windows=args.limit_windows,
             csv_dayfirst=args.csv_dayfirst,
+            csv_tz=args.csv_tz,
         )
         with Pool(args.num_workers) as pool:
             sub_stats = pool.map(worker, pcaps)
@@ -106,6 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             samples_per_shard=args.samples_per_shard,
             limit_windows=args.limit_windows,
             csv_dayfirst=args.csv_dayfirst,
+            csv_tz=args.csv_tz,
         )
 
     _print_stats(stats)

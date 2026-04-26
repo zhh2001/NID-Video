@@ -81,6 +81,7 @@ def run_etl(
     samples_per_shard: int = 1000,
     limit_windows: int | None = None,
     csv_dayfirst: bool = True,
+    csv_tz: str = "America/Halifax",
     label_index: LabelIndex | None = None,
 ) -> EtlStats:
     """Run single-process ETL across the provided pcaps.
@@ -93,6 +94,9 @@ def run_etl(
       samples_per_shard: webdataset shard rolling target.
       limit_windows: cap the total emitted windows (debug/smoke).
       csv_dayfirst: pass True for raw CIC-IDS-2017 CSVs (DD/MM/YYYY timestamps).
+      csv_tz: IANA tz of the wall-clock timestamps in the CSV. Default
+        "America/Halifax" matches CIC-IDS-2017; pass "UTC" for synthetic
+        fixtures whose timestamps are already UTC.
       label_index: optional pre-built index (test/multi-worker re-use).
 
     Failed pcaps are logged and skipped — they don't crash the run.
@@ -104,7 +108,7 @@ def run_etl(
 
     if label_index is None:
         csvs = [Path(p) for p in label_csv_paths]
-        label_index = LabelIndex.from_csv(csvs, dayfirst=csv_dayfirst)
+        label_index = LabelIndex.from_csv(csvs, dayfirst=csv_dayfirst, csv_tz=csv_tz)
 
     port_map = build_port_mapping(data_config.num_port_buckets)
     channel_cfg = ChannelConfig.from_data_config(data_config)
@@ -132,6 +136,7 @@ def run_etl(
             try:
                 packets = parse_pcap(pcap_path)
                 stop = False
+                windows_before = stats.n_windows_emitted
                 for window in windower(packets, pcap_source=pcap_path.name):
                     if limit_windows is not None and stats.n_windows_emitted >= limit_windows:
                         logger.info(f"--limit-windows={limit_windows} reached")
@@ -169,7 +174,20 @@ def run_etl(
                     current_shard_counts[win_label.label] += 1
                     stats.n_unmatched_total += win_label.n_unmatched
 
-                stats.n_pcaps_processed += 1
+                # Distinguish "pcap parsed but produced 0 windows" (a real
+                # failure mode — was being silently mis-counted as OK pre-M3)
+                # from "limit_windows preempted before this pcap could yield"
+                # (legitimate stop, not the pcap's fault).
+                produced = stats.n_windows_emitted - windows_before
+                if produced == 0 and not stop:
+                    logger.warning(
+                        f"{pcap_path.name}: produced 0 windows — counting as failed. "
+                        "Likely causes: parse error, all-malformed packets, or "
+                        "pcap span shorter than one window."
+                    )
+                    stats.n_pcaps_failed += 1
+                else:
+                    stats.n_pcaps_processed += 1
                 if stop:
                     break
             except Exception as exc:                                # noqa: BLE001

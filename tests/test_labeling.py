@@ -148,7 +148,9 @@ def small_idx(tmp_path: Path) -> LabelIndex:
         ("10.0.0.2", 23456, "10.0.0.99", 80, 6, _iso(second=2), 500_000, "BENIGN"),
         ("10.0.0.3", 34567, "10.0.0.99", 22, 6, _iso(second=4), 750_000, "SSH-Patator"),
     ])
-    return LabelIndex.from_csv(csv)
+    # Synthetic timestamps in this file are UTC-naive on purpose; keep the
+    # CSV interpretation aligned by passing csv_tz="UTC".
+    return LabelIndex.from_csv(csv, csv_tz="UTC")
 
 
 def test_label_index_indexes_all_flows(small_idx: LabelIndex) -> None:
@@ -225,7 +227,7 @@ def test_label_window_mixed_attacks_picks_dominant(tmp_path: Path) -> None:
         ("10.0.0.1", 12345, "10.0.0.99", 80, 6, _iso(), 5_000_000, "DDoS"),
         ("10.0.0.2", 23456, "10.0.0.99", 22, 6, _iso(), 5_000_000, "SSH-Patator"),
     ])
-    idx = LabelIndex.from_csv(csv)
+    idx = LabelIndex.from_csv(csv, csv_tz="UTC")
 
     ts0 = _unix() + 0.5
     pkts = [
@@ -269,7 +271,7 @@ def test_label_window_handles_dayfirst_timestamps(tmp_path: Path) -> None:
     _write_csv(csv, [
         ("10.0.0.1", 12345, "10.0.0.99", 80, 6, "5/7/2017 9:00:00", 1_000_000, "DDoS"),
     ])
-    idx = LabelIndex.from_csv(csv, dayfirst=True)
+    idx = LabelIndex.from_csv(csv, dayfirst=True, csv_tz="UTC")
     assert idx.n_flows == 1
 
     ts = dt.datetime(2017, 7, 5, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp() + 0.5
@@ -293,12 +295,195 @@ def test_csv_with_ascii_hyphen_web_attack_maps_to_en_dash_id(tmp_path: Path) -> 
         ("10.0.0.1", 12345, "10.0.0.99", 80, 6, _iso(),
          5_000_000, "Web Attack - Brute Force"),
     ])
-    idx = LabelIndex.from_csv(csv)
+    idx = LabelIndex.from_csv(csv, csv_tz="UTC")
 
     ts = _unix() + 0.5
     lid = idx.lookup("10.0.0.1", 12345, "10.0.0.99", 80, 6, ts)
     # Must match the EN-DASH constant, not be None or a new id
     assert lid == LABEL_TO_ID_RAW["Web Attack – Brute Force"] == 10
+
+
+def test_csv_drops_fully_empty_trailing_rows_with_distinct_warning(tmp_path: Path) -> None:
+    """CIC's WebAttacks CSV ships with ~288k trailing all-empty rows (commas-only).
+    These must be dropped up front so they aren't mis-reported as 'unparseable
+    timestamps' and don't pollute the index. Discovered M3-to-M4 dry-run."""
+    import io
+    from nid_video.utils import logger as loguru_logger
+
+    csv = tmp_path / "labels.csv"
+    # Build the CSV at byte level so the trailing rows are exactly the
+    # commas-only lines CIC's tool emits.
+    header = (b" Source IP, Source Port, Destination IP, Destination Port,"
+              b" Protocol, Timestamp, Flow Duration, Label\n")
+    real_rows = (
+        b"10.0.0.1,12345,10.0.0.99,80,6,2017-07-05 09:00:00,1000000,DDoS\n"
+        b"10.0.0.2,23456,10.0.0.99,22,6,2017-07-05 09:00:01,1000000,SSH-Patator\n"
+    )
+    empty_rows = b",,,,,,,\n" * 5
+    csv.write_bytes(header + real_rows + empty_rows)
+
+    sink = io.StringIO()
+    handler_id = loguru_logger.add(sink, level="WARNING")
+    try:
+        idx = LabelIndex.from_csv(csv, csv_tz="UTC")
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert idx.n_flows == 2
+
+    log = sink.getvalue()
+    assert "5 fully-empty rows dropped" in log, log
+    # No "unparseable timestamps" warning, because we dropped empties first.
+    assert "unparseable timestamps" not in log, log
+
+
+def test_csv_warns_separately_when_row_has_data_but_bad_timestamp(tmp_path: Path) -> None:
+    """A row with real data but a malformed timestamp should still trigger
+    the 'unparseable timestamps' warning (defensive — so future CSV format
+    issues stay visible after the empty-row drop is in place)."""
+    import io
+    from nid_video.utils import logger as loguru_logger
+
+    csv = tmp_path / "labels.csv"
+    header = (b" Source IP, Source Port, Destination IP, Destination Port,"
+              b" Protocol, Timestamp, Flow Duration, Label\n")
+    body = (
+        b"10.0.0.1,12345,10.0.0.99,80,6,2017-07-05 09:00:00,1000000,DDoS\n"
+        b"10.0.0.2,23456,10.0.0.99,22,6,not-a-timestamp,1000000,SSH-Patator\n"
+    )
+    csv.write_bytes(header + body)
+
+    sink = io.StringIO()
+    handler_id = loguru_logger.add(sink, level="WARNING")
+    try:
+        idx = LabelIndex.from_csv(csv, csv_tz="UTC")
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert idx.n_flows == 1   # only the parseable row makes it in
+    log = sink.getvalue()
+    assert "fully-empty" not in log, log     # nothing was fully empty
+    assert "unparseable timestamps" in log, log
+    assert "1 rows" in log, log
+
+
+# ---------------------------------------------------------------------------
+# Timezone handling (Finding 3c): wall-clock CSV → UTC unix epoch
+# ---------------------------------------------------------------------------
+
+
+def test_csv_tz_localizes_adt_summer_time_to_utc(tmp_path: Path) -> None:
+    """CIC-IDS-2017 was captured 2017-07-{3..7} in Halifax (ADT, UTC-3 in DST).
+    A CSV row reading '2017-07-06 09:00:00' must be stored as the unix epoch
+    of 2017-07-06 12:00:00 UTC, not 09:00:00 UTC. The synthetic test fixtures
+    that pre-date this fix used UTC strings, so they keep csv_tz='UTC'; real
+    CIC uses csv_tz='America/Halifax' (the new default)."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    csv = tmp_path / "labels.csv"
+    _write_csv(csv, [
+        ("10.0.0.1", 12345, "10.0.0.99", 80, 6,
+         "2017-07-06 09:00:00", 1_000_000, "DDoS"),
+    ])
+    idx = LabelIndex.from_csv(csv, csv_tz="America/Halifax")
+
+    # Independent reference: 09:00 ADT = 12:00 UTC.
+    expected_unix = dt.datetime(
+        2017, 7, 6, 9, 0, 0, tzinfo=ZoneInfo("America/Halifax")
+    ).timestamp()
+
+    flows = next(iter(idx._index.values()))
+    assert flows[0].start_ts == pytest.approx(expected_unix, abs=1.0)
+    # And concretely: 12:00:00 UTC of the same day.
+    expected_utc = dt.datetime(
+        2017, 7, 6, 12, 0, 0, tzinfo=dt.timezone.utc
+    ).timestamp()
+    assert flows[0].start_ts == pytest.approx(expected_utc, abs=1.0)
+
+
+def test_csv_tz_localizes_ast_winter_time_to_utc(tmp_path: Path) -> None:
+    """DST regression: a January CIC-style timestamp must use AST (UTC-4),
+    not ADT (UTC-3). CIC-IDS-2017 doesn't span winter, but cross-dataset users
+    in M5 (e.g. UNSW-NB15 captures from January) need this correct.
+    zoneinfo handles the DST transition by date — this test pins it down."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    csv = tmp_path / "labels.csv"
+    _write_csv(csv, [
+        ("10.0.0.1", 12345, "10.0.0.99", 80, 6,
+         "2017-01-15 09:00:00", 1_000_000, "DDoS"),
+    ])
+    idx = LabelIndex.from_csv(csv, csv_tz="America/Halifax")
+
+    # 09:00 AST = 13:00 UTC (UTC-4 in winter, NOT UTC-3).
+    expected_utc = dt.datetime(
+        2017, 1, 15, 13, 0, 0, tzinfo=dt.timezone.utc
+    ).timestamp()
+    expected_via_zoneinfo = dt.datetime(
+        2017, 1, 15, 9, 0, 0, tzinfo=ZoneInfo("America/Halifax")
+    ).timestamp()
+    assert expected_utc == pytest.approx(expected_via_zoneinfo, abs=1.0)
+
+    flows = next(iter(idx._index.values()))
+    assert flows[0].start_ts == pytest.approx(expected_utc, abs=1.0)
+
+
+def test_csv_tz_utc_passes_through_naive_timestamp(tmp_path: Path) -> None:
+    """csv_tz='UTC' must give the same unix epoch as a naive UTC timestamp —
+    this is what synthetic test fixtures rely on."""
+    import datetime as dt
+
+    csv = tmp_path / "labels.csv"
+    _write_csv(csv, [
+        ("10.0.0.1", 12345, "10.0.0.99", 80, 6,
+         "2017-07-06 09:00:00", 1_000_000, "DDoS"),
+    ])
+    idx = LabelIndex.from_csv(csv, csv_tz="UTC")
+
+    expected_utc = dt.datetime(
+        2017, 7, 6, 9, 0, 0, tzinfo=dt.timezone.utc
+    ).timestamp()
+    flows = next(iter(idx._index.values()))
+    assert flows[0].start_ts == pytest.approx(expected_utc, abs=1.0)
+
+
+def test_csv_with_cp1252_endash_byte_maps_to_web_attack_subtypes(tmp_path: Path) -> None:
+    """Real CIC WebAttacks CSVs store the EN DASH as the single CP-1252 byte
+    0x96. Reading as latin-1 (the prior behaviour) silently dropped all three
+    Web-Attack subtypes — they failed lookup against LABEL_TO_ID and fell back
+    to BENIGN. Reading as cp1252 turns 0x96 into U+2013 and the keys match.
+
+    Discovered in the M3-to-M4 dry-run: 2180 Thursday-morning Web Attack rows
+    were silently mis-labelled BENIGN.
+    """
+    csv = tmp_path / "labels.csv"
+    header = (b" Source IP, Source Port, Destination IP, Destination Port,"
+              b" Protocol, Timestamp, Flow Duration, Label\n")
+    # Each row's label cell contains the literal CP-1252 byte 0x96 between
+    # "Attack" and the subtype, exactly as CIC ships them.
+    body = (
+        b"10.0.0.1,12345,10.0.0.99,80,6,2017-07-05 09:00:00,1000000,"
+        b"Web Attack \x96 Brute Force\n"
+        b"10.0.0.2,12346,10.0.0.99,80,6,2017-07-05 09:00:01,1000000,"
+        b"Web Attack \x96 XSS\n"
+        b"10.0.0.3,12347,10.0.0.99,80,6,2017-07-05 09:00:02,1000000,"
+        b"Web Attack \x96 Sql Injection\n"
+        b"10.0.0.4,12348,10.0.0.99,80,6,2017-07-05 09:00:03,1000000,BENIGN\n"
+    )
+    csv.write_bytes(header + body)
+
+    idx = LabelIndex.from_csv(csv, csv_tz="UTC")
+
+    ts0 = _unix(second=0) + 0.5
+    ts1 = _unix(second=1) + 0.5
+    ts2 = _unix(second=2) + 0.5
+    ts3 = _unix(second=3) + 0.5
+    assert idx.lookup("10.0.0.1", 12345, "10.0.0.99", 80, 6, ts0) == 10  # Brute Force
+    assert idx.lookup("10.0.0.2", 12346, "10.0.0.99", 80, 6, ts1) == 11  # XSS
+    assert idx.lookup("10.0.0.3", 12347, "10.0.0.99", 80, 6, ts2) == 12  # Sql Injection
+    assert idx.lookup("10.0.0.4", 12348, "10.0.0.99", 80, 6, ts3) == 0   # BENIGN
 
 
 # ---------------------------------------------------------------------------

@@ -1,15 +1,22 @@
 """CIC-IDS-2017 flow-label alignment for ETL windows.
 
-Two CIC foot-guns to keep in mind, both fixed in this module:
+Three CIC foot-guns to keep in mind, all fixed in this module:
 
   1. The CIC space-bug: every column name in TrafficLabelling/*.csv carries a
      literal leading space (e.g. ` Label`, ` Source IP`). _load_label_csv strips
      whitespace from all columns once on load so downstream code never has to
      know about it.
 
-  2. CIC ships Web-Attack labels with an EN DASH (–) between "Web Attack"
-     and the subtype, but some redistribution copies use an ASCII hyphen.
-     normalize_label_name() canonicalizes both into the EN DASH form.
+  2. The CSVs are CP-1252 (Windows-1252) encoded — not latin-1, not UTF-8.
+     The labelling tool that produced them ran on Windows. Web-Attack labels
+     contain an EN DASH stored as the single byte ``0x96``. CP-1252 decodes
+     ``0x96`` into U+2013 (EN DASH) directly; latin-1 decodes it into the
+     U+0096 control character, which then never matches LABEL_TO_ID and would
+     silently fall through to BENIGN. _load_label_csv reads with cp1252 to
+     resolve this. Discovered in the M3-to-M4 dry-run on real Thursday data.
+
+  3. Some redistribution copies replace the EN DASH with an ASCII hyphen.
+     normalize_label_name() handles that fallback.
 
 Idea.md §3.5 (multi-class output, CIC-IDS labels).
 """
@@ -20,6 +27,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -162,8 +170,12 @@ def _load_label_csv(path: Path) -> pd.DataFrame:
     Shipped CSVs prefix every column with one literal space; we strip whitespace
     from all column names once on load. DO NOT remove this call — failing to
     strip leaves ` Label` undetectable to consumers expecting `Label`.
+
+    Encoding is cp1252 (Windows-1252), not latin-1: the labelling tool was
+    Windows-native and stores the EN DASH in Web-Attack labels as byte 0x96.
+    See module docstring footgun #2.
     """
-    df = pd.read_csv(path, encoding="latin-1", low_memory=False)
+    df = pd.read_csv(path, encoding="cp1252", low_memory=False)
     df.columns = df.columns.str.strip()  # CIC space-bug fix
     return df
 
@@ -188,12 +200,18 @@ class LabelIndex:
         paths: Path | Iterable[Path],
         *,
         dayfirst: bool = False,
+        csv_tz: str = "America/Halifax",
     ) -> "LabelIndex":
         """Build from one or more CSV paths.
 
         Args:
           dayfirst: pass True for raw CIC-IDS CSVs, whose timestamps are like
             ``5/7/2017 9:00:13`` meaning 5 July 2017 (DD/MM/YYYY).
+          csv_tz: IANA tz database name (e.g. ``"America/Halifax"`` for CIC-IDS,
+            ``"UTC"`` for synthetic test fixtures, ``"Australia/Sydney"`` if
+            ever needed for UNSW-NB15). Wall-clock CSV times are localized to
+            this zone and converted to UTC. DST is handled by zoneinfo.
+            Default Halifax matches CIC-IDS-2017's recording site.
         """
         if isinstance(paths, Path):
             paths = [paths]
@@ -201,7 +219,7 @@ class LabelIndex:
         for p in paths:
             p = Path(p)
             df = _load_label_csv(p)
-            idx._absorb(df, source=p.name, dayfirst=dayfirst)
+            idx._absorb(df, source=p.name, dayfirst=dayfirst, csv_tz=csv_tz)
         logger.info(
             f"LabelIndex built: {idx._n_flows} flows across {idx.n_keys} 5-tuples"
         )
@@ -215,24 +233,48 @@ class LabelIndex:
     def n_flows(self) -> int:
         return self._n_flows
 
-    def _absorb(self, df: pd.DataFrame, source: str, dayfirst: bool) -> None:
+    def _absorb(self, df: pd.DataFrame, source: str, dayfirst: bool,
+                csv_tz: str) -> None:
         required = ["Source IP", "Source Port", "Destination IP", "Destination Port",
                     "Protocol", "Timestamp", "Flow Duration", "Label"]
         missing = [c for c in required if c not in df.columns]
         if missing:
             raise ValueError(f"{source}: missing required columns {missing}")
 
+        # CIC's WebAttacks CSV ships with ~288k trailing all-empty rows (a CIC
+        # tooling bug discovered in the M3-to-M4 dry-run). Dropping them up
+        # front gives an honest count and stops them from being mis-reported
+        # as "unparseable timestamps".
+        n_before = len(df)
+        df = df.dropna(how="all").reset_index(drop=True)
+        n_empty = n_before - len(df)
+        if n_empty > 0:
+            logger.warning(f"{source}: {n_empty} fully-empty rows dropped")
+
         ts = pd.to_datetime(df["Timestamp"], dayfirst=dayfirst,
                             format="mixed", errors="coerce")
         bad_mask = ts.isna()
         if bad_mask.any():
             logger.warning(
-                f"{source}: {int(bad_mask.sum())} rows with unparseable timestamps dropped"
+                f"{source}: {int(bad_mask.sum())} rows with unparseable timestamps "
+                f"dropped (after empty-row removal — these have data but bad ts)"
             )
             df = df.loc[~bad_mask].reset_index(drop=True)
             ts = ts.loc[~bad_mask].reset_index(drop=True)
-        # Unix-epoch float seconds
-        start_unix = (ts.astype("int64") // 10**9).astype(np.float64)
+
+        # Convert wall-clock CSV strings to UTC unix epoch. CIC-IDS-2017
+        # records local Atlantic time (ADT in July, DST-aware); pcap ts is
+        # UTC unix epoch. Naive int64 conversion would treat the CSV as UTC
+        # and silently mis-align by 3-4 hours, causing every label lookup to
+        # miss. zoneinfo handles DST automatically so cross-dataset users in
+        # M5 (UNSW-NB15 in January = AST UTC-4, etc.) just pass a different
+        # csv_tz.
+        tz = ZoneInfo(csv_tz)
+        ts_utc = ts.dt.tz_localize(tz, ambiguous="NaT", nonexistent="NaT") \
+                   .dt.tz_convert("UTC")
+        # Unix-epoch float seconds (tz-aware Timestamp.astype('int64') is the
+        # underlying UTC nanosecond value, which is what we want).
+        start_unix = (ts_utc.astype("int64") // 10**9).astype(np.float64)
         # CIC-IDS Flow Duration is in microseconds
         duration_s = pd.to_numeric(df["Flow Duration"], errors="coerce").fillna(0.0) / 1e6
         end_unix = start_unix + duration_s.astype(np.float64)

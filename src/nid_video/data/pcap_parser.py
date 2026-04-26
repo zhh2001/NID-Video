@@ -4,6 +4,10 @@ dpkt is the production parser (C-backed, hundreds of thousands of packets per
 second). scapy is reserved for test-pcap *construction* and never imported here.
 See M2 design decisions for the rationale.
 
+Both classic libpcap and pcapng are supported; the format is chosen per file by
+inspecting the first 4 magic bytes. CIC-IDS-2017 ships pcapng; the synthetic
+test fixtures use classic libpcap.
+
 Idea.md §3.1 (Stage 1 · 数据摄入).
 """
 
@@ -13,7 +17,7 @@ import socket
 import struct
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import IO, NamedTuple, Union
 
 import dpkt
 
@@ -25,6 +29,49 @@ PROTO_TCP = 6
 PROTO_UDP = 17
 ETH_TYPE_IP4 = 0x0800
 ETH_TYPE_IP6 = 0x86DD
+
+# Magic bytes for pcap format dispatch. pcapng uses a Section Header Block
+# whose first 4 bytes are the Block Type (0x0a0d0d0a). Classic libpcap uses
+# either 0xa1b2c3d4 (microsecond) or its byte-swapped form, depending on
+# endianness of the host that wrote the file.
+_MAGIC_PCAPNG = b"\x0a\x0d\x0d\x0a"
+_MAGIC_PCAP_LE = b"\xd4\xc3\xb2\xa1"
+_MAGIC_PCAP_BE = b"\xa1\xb2\xc3\xd4"
+
+# Below this many yielded packets, log a WARNING after iteration ends. Real
+# CIC-IDS pcaps contain millions of packets; a yield this small almost always
+# means a parse problem (wrong datalink, all-malformed frames, partial file)
+# and the user should be told before the rest of the pipeline silently produces
+# zero windows.
+_LOW_YIELD_WARN_THRESHOLD = 100
+
+PcapReader = Union[dpkt.pcap.Reader, dpkt.pcapng.Reader]
+
+
+def _detect_pcap_format(path: Path) -> str:
+    """Return ``"pcap"`` or ``"pcapng"`` based on the file's magic bytes.
+
+    Raises ``ValueError`` if the magic matches neither supported format. We do
+    not fall through to ``dpkt.pcap.Reader`` for unknown magics because its
+    own header validation produces a confusing low-level error message; an
+    explicit early failure is easier to diagnose.
+    """
+    with path.open("rb") as fh:
+        magic = fh.read(4)
+    if magic == _MAGIC_PCAPNG:
+        return "pcapng"
+    if magic in (_MAGIC_PCAP_LE, _MAGIC_PCAP_BE):
+        return "pcap"
+    raise ValueError(
+        f"unrecognized pcap magic {magic.hex()} in {path}; "
+        f"expected pcap (d4c3b2a1 / a1b2c3d4) or pcapng (0a0d0d0a)"
+    )
+
+
+def _open_reader(fh: IO[bytes], fmt: str) -> PcapReader:
+    if fmt == "pcapng":
+        return dpkt.pcapng.Reader(fh)
+    return dpkt.pcap.Reader(fh)
 
 
 class PacketRecord(NamedTuple):
@@ -97,18 +144,23 @@ class PacketStream:
         stats = self._stats
         path_name = self.path.name
 
+        # Detect format up front so the error message is honest: the caller
+        # gets a ValueError that can be caught and counted as a failed pcap,
+        # not a silent zero-yield iteration that looks like success.
+        fmt = _detect_pcap_format(self.path)
+
         with self.path.open("rb") as fh:
             try:
-                reader = dpkt.pcap.Reader(fh)
+                reader = _open_reader(fh, fmt)
             except (ValueError, NeedData, UnpackError) as exc:
-                logger.error(f"Cannot open pcap {self.path}: {exc}")
-                return
+                raise ValueError(
+                    f"Cannot open {fmt} reader on {self.path}: {exc}"
+                ) from exc
             dlt = reader.datalink()
             if dlt != dpkt.pcap.DLT_EN10MB:
-                logger.error(
+                raise ValueError(
                     f"{self.path}: unsupported datalink {dlt} (expected DLT_EN10MB=1)"
                 )
-                return
 
             for ts, buf in reader:
                 try:
@@ -130,6 +182,17 @@ class PacketStream:
                 ip = eth.data
                 proto = ip.p
                 l4 = ip.data
+                # Real CIC pcaps contain truncated frames where dpkt's IP-layer
+                # parse succeeds but the L4 layer is left as raw bytes (e.g. a
+                # TCP header sliced before sport/dport). Without this guard the
+                # next .sport access raises AttributeError and crashes the whole
+                # iterator; the per-packet try/except above only wraps the
+                # Ethernet parse, not the L4 attribute path.
+                if not hasattr(l4, "sport") or not hasattr(l4, "dport"):
+                    stats["malformed"] += 1
+                    if stats["malformed"] == 1:
+                        logger.warning(f"{path_name}: first malformed packet at ts={ts}")
+                    continue
                 if proto == proto_tcp:
                     sport = l4.sport
                     dport = l4.dport
@@ -164,6 +227,21 @@ class PacketStream:
             f"pcap {path_name}: yielded={s['yielded']} malformed={s['malformed']} "
             f"ipv6={s['ipv6']} non_ip={s['non_ip']} non_tcpudp={s['non_tcpudp']}"
         )
+        # Visibility for the false-positive case caught in the M3 dry-run:
+        # opening succeeded but iteration yielded nothing useful. This used to
+        # bubble up as an "OK pcap with 0 packets" — silently wrong.
+        if s["yielded"] == 0:
+            logger.warning(
+                f"{path_name}: yielded 0 IPv4 TCP/UDP packets — likely empty, "
+                f"all-malformed, or non-Ethernet pcap "
+                f"(malformed={s['malformed']}, ipv6={s['ipv6']}, "
+                f"non_ip={s['non_ip']}, non_tcpudp={s['non_tcpudp']})"
+            )
+        elif s["yielded"] < _LOW_YIELD_WARN_THRESHOLD:
+            logger.warning(
+                f"{path_name}: only {s['yielded']} IPv4 TCP/UDP packets "
+                f"(<{_LOW_YIELD_WARN_THRESHOLD}); verify this pcap is intact"
+            )
 
 
 def parse_pcap(path: Path | str) -> Iterator[PacketRecord]:

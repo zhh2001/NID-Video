@@ -163,6 +163,7 @@ def test_run_etl_emits_shards_and_manifest(synthetic_dataset) -> None:
         pcaps, csvs, out_dir, cfg.data,
         samples_per_shard=4,
         csv_dayfirst=False,         # synth uses ISO timestamps
+        csv_tz="UTC",               # interpret naive ISO as UTC, not ADT
     )
 
     assert isinstance(stats, EtlStats)
@@ -183,7 +184,8 @@ def test_shards_round_trip_through_webdataset(synthetic_dataset) -> None:
     """Read the written shards back; tensors and labels must match expectations."""
     pcaps, csvs, out_dir = synthetic_dataset
     cfg = load_config(project_root() / "configs" / "base.yaml")
-    run_etl(pcaps, csvs, out_dir, cfg.data, samples_per_shard=4, csv_dayfirst=False)
+    run_etl(pcaps, csvs, out_dir, cfg.data, samples_per_shard=4,
+            csv_dayfirst=False, csv_tz="UTC")
 
     shard_files = sorted((out_dir / "shards").glob("shard-*.tar"))
     urls = [str(p) for p in shard_files]
@@ -229,7 +231,7 @@ def test_manifest_parquet_has_per_shard_rows(synthetic_dataset) -> None:
     pcaps, csvs, out_dir = synthetic_dataset
     cfg = load_config(project_root() / "configs" / "base.yaml")
     stats = run_etl(pcaps, csvs, out_dir, cfg.data, samples_per_shard=4,
-                    csv_dayfirst=False)
+                    csv_dayfirst=False, csv_tz="UTC")
 
     table = pq.read_table(out_dir / "manifest.parquet")
     assert table.num_rows == stats.n_shards
@@ -251,7 +253,7 @@ def test_limit_windows_respected(synthetic_dataset) -> None:
     pcaps, csvs, out_dir = synthetic_dataset
     cfg = load_config(project_root() / "configs" / "base.yaml")
     stats = run_etl(pcaps, csvs, out_dir, cfg.data, samples_per_shard=4,
-                    csv_dayfirst=False, limit_windows=3)
+                    csv_dayfirst=False, csv_tz="UTC", limit_windows=3)
     assert stats.n_windows_emitted <= 3
 
 
@@ -312,7 +314,7 @@ def test_failed_pcap_is_logged_not_raised(tmp_path) -> None:
 
     cfg = load_config(project_root() / "configs" / "base.yaml")
     stats = run_etl([bogus, real], [csv], tmp_path / "out", cfg.data,
-                    samples_per_shard=4, csv_dayfirst=False)
+                    samples_per_shard=4, csv_dayfirst=False, csv_tz="UTC")
 
     # Bogus pcap should fail or yield zero packets; real pcap should produce windows
     assert stats.n_windows_emitted > 0
