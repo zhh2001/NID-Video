@@ -1,16 +1,16 @@
-"""M3 Trainer: minimal FP16 + 8-bit AdamW + gradient-accumulation loop.
+"""Trainer: FP16 + AdamW + grad-accumulation loop with cosine LR scheduling.
 
-Scope (per M3 task 3.4):
+Scope (M3 baseline + M4 task 4.3 LR scheduler):
   * FP16 AMP via `torch.autocast` + `GradScaler`
   * Gradient accumulation
   * 8-bit AdamW (bitsandbytes) with a `--debug` switch back to vanilla AdamW
+  * **M4: cosine LR with linear warmup**, stepped per grad step
   * Per-step loguru logging (every 10 micro-batches)
   * Per-epoch checkpoint to `outputs/run_<ts>/ckpt/epoch_{N}.safetensors`
 
-Out of scope (deferred to M4):
-  * Resume from checkpoint, optimizer state save/load
-  * Eval / val split / metrics
-  * lr scheduler, warmup, EMA
+Out of scope (deferred to M4 later tasks):
+  * Resume from checkpoint, optimizer state save/load (task 4.4)
+  * Eval / val split / metrics (task 4.5)
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from safetensors.torch import save_file
 from torch import nn
 from torch.utils.data import DataLoader
 
+from nid_video.trainer.scheduler import make_cosine_scheduler
 from nid_video.utils import logger
 from nid_video.utils.config import TrainingConfig
 
@@ -69,6 +70,9 @@ class Trainer:
         run_dir: Path | None = None,
         criterion: nn.Module | None = None,
         optimizer_class: Callable | None = None,
+        warmup_steps: int = 500,
+        total_steps: int | None = None,
+        min_lr_ratio: float = 0.01,
     ) -> None:
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -84,6 +88,29 @@ class Trainer:
 
         self.criterion = criterion if criterion is not None else nn.CrossEntropyLoss()
         self.optimizer = _build_optimizer(self.model, config, optimizer_class)
+
+        # M4 task 4.3: cosine LR with linear warmup. ``total_steps`` is the
+        # full grad-step budget (NOT micro-step). When ``None`` we fall back
+        # to a num_epochs-based estimate; task 4.6 will compute it precisely
+        # from the manifest sample count once the dataset is final. The
+        # placeholder is a heuristic, not a contract — log a WARNING so
+        # debug runs notice they're on the fallback path.
+        if total_steps is None:
+            total_steps = max(warmup_steps + 1, config.num_epochs * 1000)
+            logger.warning(
+                f"total_steps was None; using fallback estimate {total_steps} "
+                f"({config.num_epochs} epochs × 1000 grad steps/epoch). Pass "
+                f"total_steps explicitly when the dataset size is known."
+            )
+        self.warmup_steps = int(warmup_steps)
+        self.total_steps = int(total_steps)
+        self.min_lr_ratio = float(min_lr_ratio)
+        self.scheduler = make_cosine_scheduler(
+            self.optimizer,
+            warmup_steps=self.warmup_steps,
+            total_steps=self.total_steps,
+            min_ratio=self.min_lr_ratio,
+        )
 
         # Mixed-precision setup
         if device == "cuda" and config.precision == "fp16":
@@ -107,7 +134,8 @@ class Trainer:
             f"Trainer ready: device={device}, precision={config.precision}, "
             f"optimizer={config.optimizer}, lr={config.lr}, wd={config.weight_decay}, "
             f"batch_size={config.batch_size}, grad_accumulation={self.grad_accum}, "
-            f"run_dir={self.run_dir}"
+            f"warmup_steps={self.warmup_steps}, total_steps={self.total_steps}, "
+            f"min_lr_ratio={self.min_lr_ratio}, run_dir={self.run_dir}"
         )
 
     # ------------------------------------------------------------------
@@ -219,6 +247,12 @@ class Trainer:
                 else:
                     self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
+                # Advance the cosine scheduler once per grad step (NOT micro
+                # step). PyTorch convention: scheduler.step() AFTER optimizer
+                # step. NB: when GradScaler skipped due to inf/nan grads the
+                # optimizer didn't actually step, but we advance the scheduler
+                # anyway — bounded drift, acceptable in M4 baseline.
+                self.scheduler.step()
                 self.global_grad_step += 1
 
             self.global_micro_step += 1
