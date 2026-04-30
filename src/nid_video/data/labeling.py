@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -193,6 +194,10 @@ class LabelIndex:
             tuple[str, int, str, int, int], list[FlowLabel]
         ] = defaultdict(list)
         self._n_flows = 0
+        # Populated during _absorb. csv_source -> {label_id: (tmin, tmax)}
+        # (BENIGN excluded). Used to build per-(csv, attack_class) time
+        # bounds for the M4 split module.
+        self._csv_attack_summaries: dict[str, dict[int, tuple[float, float]]] = {}
 
     @classmethod
     def from_csv(
@@ -291,6 +296,7 @@ class LabelIndex:
             label_ids = label_ids.fillna(BENIGN_ID)
         label_ids = label_ids.astype(int)
 
+        attack_summary: dict[int, tuple[float, float]] = {}
         for sip, sport, dip, dport, proto, s, e, lid in zip(
             df["Source IP"].astype(str),
             df["Source Port"].astype(int),
@@ -304,6 +310,38 @@ class LabelIndex:
                 FlowLabel(start_ts=float(s), end_ts=float(e), label_id=int(lid))
             )
             self._n_flows += 1
+            lid_int = int(lid)
+            if lid_int != BENIGN_ID:
+                s_f = float(s)
+                if lid_int in attack_summary:
+                    omin, omax = attack_summary[lid_int]
+                    if s_f < omin or s_f > omax:
+                        attack_summary[lid_int] = (min(omin, s_f), max(omax, s_f))
+                else:
+                    attack_summary[lid_int] = (s_f, s_f)
+        self._csv_attack_summaries[source] = attack_summary
+
+    @cached_property
+    def attack_windows_by_csv(self) -> dict[str, list[tuple[int, float, float]]]:
+        """Per-CSV attack-class time bounds, used by the M4 split module.
+
+        Returns ``{csv_source: [(label_id, tmin, tmax), ...]}`` with
+        BENIGN excluded. Each ``(label_id, tmin, tmax)`` is the [min,max]
+        ``start_ts`` over all flows in that CSV with that ``label_id``.
+
+        Lazily computed on first access from ``_csv_attack_summaries``
+        (which is populated during ``from_csv``). Cached per-instance —
+        the index is treated as immutable after construction. Each list
+        is sorted by ``tmin`` ascending so callers that need overlap
+        tiebreak (split.py) get earliest-first ordering for free.
+        """
+        return {
+            csv_src: sorted(
+                [(lid, tmin, tmax) for lid, (tmin, tmax) in by_label.items()],
+                key=lambda t: t[1],
+            )
+            for csv_src, by_label in self._csv_attack_summaries.items()
+        }
 
     def lookup(
         self,

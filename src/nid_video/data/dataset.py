@@ -20,6 +20,7 @@ import webdataset as wds
 from torch.utils.data import DataLoader, IterableDataset
 
 from nid_video.data.labeling import collapse_to_13
+from nid_video.data.split import SplitName, WindowKey, load_splits
 from nid_video.utils import logger
 
 LabelMode = Literal["raw15", "collapsed13"]
@@ -96,23 +97,49 @@ class NidShardDataset(IterableDataset):
         *,
         label_mode: LabelMode = "collapsed13",
         shuffle_buffer: int = 1000,
+        splits_path: Path | str | None = None,
+        keep_split: SplitName | None = None,
     ) -> None:
         if label_mode not in ("raw15", "collapsed13"):
             raise ValueError(f"unknown label_mode: {label_mode}")
+        if (splits_path is None) != (keep_split is None):
+            raise ValueError(
+                "splits_path and keep_split must be set together "
+                "(both None to disable filtering)"
+            )
         self._urls = _resolve_shard_urls(shard_pattern)
         self.label_mode: LabelMode = label_mode
         self.shuffle_buffer = max(0, int(shuffle_buffer))
+        self._splits: dict[WindowKey, SplitName] | None = (
+            load_splits(Path(splits_path)) if splits_path is not None else None
+        )
+        self.keep_split: SplitName | None = keep_split
         n = len(self._urls) if isinstance(self._urls, list) else 1
         logger.info(
             f"NidShardDataset: {n} url(s), label_mode={label_mode}, "
-            f"shuffle_buffer={self.shuffle_buffer}"
+            f"shuffle_buffer={self.shuffle_buffer}, keep_split={keep_split}"
         )
+
+    def _split_predicate(self, sample: dict) -> bool:
+        """Return True iff this sample's (pcap_source, start_time) maps to the
+        target split. Called only when ``keep_split`` is set."""
+        meta = sample["meta.json"]
+        key = WindowKey(
+            pcap_source=str(meta["pcap_source"]),
+            start_time=float(meta["start_time"]),
+        )
+        return self._splits.get(key) == self.keep_split   # type: ignore[union-attr]
 
     def _build_pipeline(self) -> wds.WebDataset:
         # shardshuffle=False: shard order is deterministic; sample-level shuffle
         # below via .shuffle(buffer). Keeping shardshuffle off makes the
         # shuffle_buffer=0 case strictly reproducible.
         pipeline = wds.WebDataset(self._urls, shardshuffle=False).decode()
+        if self.keep_split is not None:
+            # Filter happens before shuffle so the shuffle buffer holds only
+            # samples for the target split — avoids wasting buffer slots on
+            # samples we'd then drop.
+            pipeline = pipeline.select(self._split_predicate)
         if self.shuffle_buffer > 0:
             pipeline = pipeline.shuffle(self.shuffle_buffer)
         return pipeline.map(lambda s: _to_torch_sample(s, self.label_mode))
@@ -137,6 +164,8 @@ def build_dataloader(
     num_workers: int = 0,
     label_mode: LabelMode = "collapsed13",
     shuffle_buffer: int = 1000,
+    splits_path: Path | str | None = None,
+    keep_split: SplitName | None = None,
     pin_memory: bool = True,
     drop_last: bool = False,
 ) -> DataLoader:
@@ -144,11 +173,14 @@ def build_dataloader(
 
     With ``num_workers > 0`` webdataset's default node/worker shard splitting
     ensures each shard is read by exactly one worker (no duplicate samples).
+    Pass ``splits_path`` + ``keep_split`` to restrict to one split.
     """
     ds = NidShardDataset(
         shard_pattern=shard_pattern,
         label_mode=label_mode,
         shuffle_buffer=shuffle_buffer,
+        splits_path=splits_path,
+        keep_split=keep_split,
     )
     return DataLoader(
         ds,
