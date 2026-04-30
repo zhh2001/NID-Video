@@ -28,6 +28,7 @@ Idea.md §3.4.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 import torch
 import torch.nn.functional as F
@@ -35,6 +36,9 @@ from torch import nn
 from transformers import VideoMAEConfig, VideoMAEModel
 
 from nid_video.utils import logger
+
+ScaleInit = Literal["zero", "trunc_normal"]
+NUM_SCALES = 2     # 0 = fast (Δt=100ms), 1 = slow (Δt=1s)
 
 
 # --------------------------------------------------------------------------
@@ -149,6 +153,7 @@ class VideoMAESmallForNID(nn.Module):
         tube_patch: tuple[int, int, int] = (2, 8, 8),
         spatial_grid: tuple[int, int] = (32, 64),
         gradient_checkpointing: bool = True,
+        scale_init: ScaleInit = "zero",
     ) -> None:
         super().__init__()
         if in_channels < 3:
@@ -164,6 +169,7 @@ class VideoMAESmallForNID(nn.Module):
 
         self._adapt_patch_embedding()
         self._adapt_position_embedding()
+        self._build_scale_components(scale_init)
 
         hidden = self.backbone.config.hidden_size
         self.classifier = nn.Linear(hidden, num_classes)
@@ -247,45 +253,122 @@ class VideoMAESmallForNID(nn.Module):
             f"norm={ext_norm:.2f}"
         )
 
+    # ----- scale token (M4) -----
+
+    def _build_scale_components(self, scale_init: ScaleInit) -> None:
+        """Create the scale token + scale embedding for multi-scale training.
+
+        The architecture has two pieces (Idea.md M4 task 4.2):
+          * ``scale_token``: a CLS-like learnable parameter, shared across
+            scales, prepended to the patch sequence at every forward pass.
+            Init: zero (HF VideoMAE has no CLS by default; an explicit zero
+            start lets the model decide whether to use this slot).
+          * ``scale_embedding``: an nn.Embedding(2, hidden) producing a
+            *conditional offset* added to ``scale_token`` based on
+            ``scale_id`` ∈ {0=fast, 1=slow}. Init governed by ``scale_init``:
+            - ``"zero"``: scale token at step 0 is identical for both
+              scales — model starts as if single-scale, scale conditioning
+              learned from gradient.
+            - ``"trunc_normal"``: small random offset (std=0.02), fast/slow
+              tokens differ from step 0.
+        Default ``"zero"`` keeps ablations clean (zero initial bias).
+        """
+        h = self.backbone.config.hidden_size
+        self.scale_token = nn.Parameter(torch.zeros(1, 1, h))
+        self.scale_embedding = nn.Embedding(NUM_SCALES, h)
+        if scale_init == "zero":
+            nn.init.zeros_(self.scale_embedding.weight)
+        elif scale_init == "trunc_normal":
+            nn.init.trunc_normal_(self.scale_embedding.weight, std=0.02)
+        else:
+            raise ValueError(f"unknown scale_init: {scale_init!r}")
+        logger.info(
+            f"scale components built: NUM_SCALES={NUM_SCALES}, hidden={h}, "
+            f"scale_init={scale_init}"
+        )
+        self.scale_init: ScaleInit = scale_init
+
     # ----- position embedding adaptation -----
 
     def _adapt_position_embedding(self) -> None:
-        # Re-use upstream's exact sinusoidal formula for our new token count
-        # rather than rolling our own — keeps the math identical to pretraining.
-        # The flatten order is time-major: token i = t·H·W + h·W + w (verified
-        # by `test_patch_token_flatten_order_is_time_major`). Our 1D sinusoidal
-        # table aligns by construction.
+        # Recompute the sinusoidal position table at length (num_patches + 1)
+        # to leave room for the prepended scale token at index 0. The
+        # sinusoidal formula is position-dependent (PE_table(N)[i] depends on
+        # absolute index ``i``), so naively prepending a zero row would
+        # silently shift all patch tokens to the wrong positions vs the
+        # 256-table the M3 model used. Recomputing at N=257 keeps the math
+        # consistent: scale_token sees pos=0, patch i sees pos=i+1.
+        #
+        # Re-use upstream's exact sinusoidal formula rather than rolling our
+        # own — keeps the math identical to pretraining. Flatten order for
+        # patches is time-major (verified by
+        # `test_patch_token_flatten_order_is_time_major`).
         #
         # Domain-shift caveat: the pretrained grid (8, 14, 14) had H-neighbour
         # distance = 14 steps, T-neighbour = 196. Ours (8, 4, 8) has 8 and 32.
-        # The attention's learned relative-distance preferences will not transfer
-        # cleanly. If M5 cross-architecture comparisons find weak fine-grained
-        # spatial signal, factorized 3D position embeddings would be the next
-        # thing to try.
+        # The attention's learned relative-distance preferences will not
+        # transfer cleanly. If M5 cross-architecture comparisons find weak
+        # fine-grained spatial signal, factorized 3D position embeddings would
+        # be the next thing to try.
         from transformers.models.videomae.modeling_videomae import get_sinusoid_encoding_table
 
-        n_pos = self.backbone.embeddings.num_patches
+        n_pos = self.backbone.embeddings.num_patches + 1   # +1 for scale token
         hidden = self.backbone.config.hidden_size
         new_pe = get_sinusoid_encoding_table(n_pos, hidden)
         # In transformers VideoMAEEmbeddings, position_embeddings is a plain Tensor
         # attribute (not a Parameter, not a buffer). Direct assignment is correct
         # and matches upstream's __init__ convention.
         self.backbone.embeddings.position_embeddings = new_pe
-        logger.info(f"position_embedding rebuilt: shape={tuple(new_pe.shape)}")
+        logger.info(f"position_embedding rebuilt: shape={tuple(new_pe.shape)} (scale token + 256 patches)")
 
     # ----- forward -----
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        scale_id: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
         """
         Args:
             x: (B, T=16, C=in_channels, H=32, W=64) float tensor.
+            scale_id: (B,) long tensor with values in [0, NUM_SCALES). 0=fast,
+              1=slow. The dataset (``MultiScaleNidDataset``) attaches this per
+              sample; single-scale callers can pass a fixed-zero tensor.
 
         Returns:
             dict with
               ``logits``:   (B, num_classes)
-              ``features``: (B, hidden_size)  -- mean-pooled across tokens, for downstream heads
+              ``features``: (B, hidden_size)  -- mean-pooled across all 257
+                            tokens (256 patches + 1 scale token).
+
+        We bypass ``backbone(x)`` and inline the embedding-stack so we can
+        prepend the scale token before the position embedding addition.
+        Equivalent to ``backbone(x)`` minus the scale-token concat.
         """
-        out = self.backbone(x)
-        feat = out.last_hidden_state.mean(dim=1)
+        B = x.size(0)
+        pe_layer = self.backbone.embeddings.patch_embeddings
+        embeddings = pe_layer(x)                                 # (B, 256, h)
+
+        scale_tok = self.scale_token.expand(B, -1, -1) + \
+            self.scale_embedding(scale_id).unsqueeze(1)          # (B, 1, h)
+        embeddings = torch.cat([scale_tok, embeddings], dim=1)   # (B, 257, h)
+
+        # Position table is a plain tensor (not parameter/buffer); make sure
+        # it lands on the embeddings' device/dtype before broadcasting.
+        pos_emb = self.backbone.embeddings.position_embeddings
+        pos_emb = pos_emb.to(device=embeddings.device, dtype=embeddings.dtype)
+        embeddings = embeddings + pos_emb
+
+        encoder_outputs = self.backbone.encoder(embeddings)
+        sequence_output = encoder_outputs[0]
+        # HF's VideoMAEModel.forward applies layernorm conditionally —
+        # ``self.backbone.layernorm`` can be ``None`` when the config disables
+        # final normalization. Mirror that None-check rather than assuming it
+        # is always present.
+        if getattr(self.backbone, "layernorm", None) is not None:
+            sequence_output = self.backbone.layernorm(sequence_output)
+
+        feat = sequence_output.mean(dim=1)
         logits = self.classifier(feat)
         return {"logits": logits, "features": feat}

@@ -49,10 +49,11 @@ def test_patch_embed_metadata_synced_with_new_grid() -> None:
 
 
 def test_position_embedding_shape_matches_token_count() -> None:
-    """For (T=16, H=32, W=64) with tube (2,8,8): tokens = 8*4*8 = 256."""
+    """For (T=16, H=32, W=64) with tube (2,8,8): patches = 8*4*8 = 256;
+    plus 1 scale token at index 0 → seq length 257 (M4 task 4.2)."""
     m = VideoMAESmallForNID(num_classes=13, pretrained=None)
     pe = m.backbone.embeddings.position_embeddings
-    assert pe.shape == (1, 256, 384), f"got {tuple(pe.shape)}"
+    assert pe.shape == (1, 257, 384), f"got {tuple(pe.shape)}"
 
 
 def test_forward_output_shapes_no_grad() -> None:
@@ -60,8 +61,9 @@ def test_forward_output_shapes_no_grad() -> None:
                             gradient_checkpointing=False)
     m.eval()
     x = torch.randn(2, 16, 6, 32, 64)
+    scale_id = torch.zeros(2, dtype=torch.long)
     with torch.no_grad():
-        out = m(x)
+        out = m(x, scale_id=scale_id)
     assert out["logits"].shape == (2, 13)
     assert out["features"].shape == (2, 384)
 
@@ -71,7 +73,8 @@ def test_forward_backward_runs() -> None:
                             gradient_checkpointing=False)
     m.train()
     x = torch.randn(2, 16, 6, 32, 64)
-    out = m(x)
+    scale_id = torch.zeros(2, dtype=torch.long)
+    out = m(x, scale_id=scale_id)
     loss = out["logits"].sum()
     loss.backward()
     has_grad = any(
@@ -194,3 +197,113 @@ def test_fallback_returns_random_videomae_when_pretrained_is_empty_string() -> N
     bb = _load_backbone_with_fallback("")
     from transformers import VideoMAEModel
     assert isinstance(bb, VideoMAEModel)
+
+
+# ---------------------------------------------------------------------------
+# M4 task 4.2: scale token, scale embedding, 257-PE
+# ---------------------------------------------------------------------------
+
+
+def test_position_embedding_for_257_tokens_is_sinusoidal_extension_of_256() -> None:
+    """257-PE is a fresh sinusoidal table at length 257, NOT a 256-PE with a
+    zero row prepended. Because the formula is position-dependent
+    (PE[i] depends on absolute index i), 257-PE[1:] (positions 1..256) is
+    not equal to 256-PE (positions 0..255) — they are shifted by one.
+
+    Pinning this explicitly: a future regression to ``cat([zeros, old_pe])``
+    would silently put patches at the wrong sinusoidal positions and break
+    pretraining transfer.
+    """
+    from transformers.models.videomae.modeling_videomae import (
+        get_sinusoid_encoding_table,
+    )
+
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None)
+    table_257 = m.backbone.embeddings.position_embeddings        # (1, 257, 384)
+    assert table_257.shape == (1, 257, 384)
+
+    table_256 = get_sinusoid_encoding_table(256, 384)            # (1, 256, 384)
+    # shape match, content does NOT (257[1..256] uses positions 1..256 vs
+    # 256[0..255] uses positions 0..255).
+    assert table_257[0, 1:].shape == table_256[0].shape
+    assert not torch.allclose(table_257[0, 1:], table_256[0])
+
+    # And: positions 1..255 are SHARED (PE depends only on absolute index).
+    table_at_n2 = get_sinusoid_encoding_table(2, 384)
+    torch.testing.assert_close(table_257[0, 1, :], table_at_n2[0, 1, :], rtol=0, atol=1e-6)
+
+
+def test_scale_token_and_embedding_are_learnable_parameters() -> None:
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None)
+    names = {n for n, _ in m.named_parameters()}
+    assert "scale_token" in names
+    assert "scale_embedding.weight" in names
+    assert m.scale_token.requires_grad
+    assert m.scale_embedding.weight.requires_grad
+
+
+def test_scale_init_zero_makes_fast_slow_initially_equivalent() -> None:
+    """With scale_init='zero', scale_embedding(0) == scale_embedding(1) == 0,
+    so the full scale_token (= shared scale_token + zero offset) is identical
+    for both scales. forward(x, scale_id=0) and forward(x, scale_id=1) must
+    therefore produce identical logits at step 0."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            gradient_checkpointing=False, scale_init="zero")
+    m.eval()
+    torch.manual_seed(0)
+    x = torch.randn(2, 16, 6, 32, 64)
+    with torch.no_grad():
+        out_fast = m(x, scale_id=torch.tensor([0, 0], dtype=torch.long))
+        out_slow = m(x, scale_id=torch.tensor([1, 1], dtype=torch.long))
+    torch.testing.assert_close(out_fast["logits"], out_slow["logits"])
+
+
+def test_scale_init_trunc_normal_breaks_fast_slow_equivalence() -> None:
+    """Random-init scale_embedding makes fast/slow logits diverge from step 0."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            gradient_checkpointing=False,
+                            scale_init="trunc_normal")
+    m.eval()
+    torch.manual_seed(0)
+    x = torch.randn(2, 16, 6, 32, 64)
+    with torch.no_grad():
+        out_fast = m(x, scale_id=torch.tensor([0, 0], dtype=torch.long))
+        out_slow = m(x, scale_id=torch.tensor([1, 1], dtype=torch.long))
+    assert not torch.allclose(out_fast["logits"], out_slow["logits"])
+
+
+def test_scale_init_unknown_value_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown scale_init"):
+        VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            scale_init="bogus")  # type: ignore[arg-type]
+
+
+def test_forward_with_mixed_scale_ids_in_a_batch() -> None:
+    """A single batch can contain both scales — gradient flows for both rows."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            gradient_checkpointing=False,
+                            scale_init="trunc_normal")
+    m.train()
+    x = torch.randn(4, 16, 6, 32, 64)
+    scale_id = torch.tensor([0, 1, 0, 1], dtype=torch.long)
+    out = m(x, scale_id=scale_id)
+    out["logits"].sum().backward()
+    assert m.scale_token.grad is not None
+    assert m.scale_embedding.weight.grad is not None
+    # Both rows of the embedding got gradient (mixed batch).
+    assert m.scale_embedding.weight.grad.abs().sum(dim=1).gt(0).all().item()
+
+
+def test_m3_state_dict_loads_with_strict_false_for_scale_params() -> None:
+    """An M3 ckpt has no scale_token / scale_embedding entries. load_state_dict
+    must accept that with ``strict=False`` and report them as missing keys —
+    this is the M4 backward-compat hook."""
+    m_new = VideoMAESmallForNID(num_classes=13, pretrained=None)
+    # Simulate an M3 state dict by stripping the new params.
+    state = {k: v for k, v in m_new.state_dict().items()
+             if not k.startswith(("scale_token", "scale_embedding"))}
+    fresh = VideoMAESmallForNID(num_classes=13, pretrained=None)
+    missing, unexpected = fresh.load_state_dict(state, strict=False)
+    assert "scale_token" in missing
+    assert "scale_embedding.weight" in missing
+    assert unexpected == []

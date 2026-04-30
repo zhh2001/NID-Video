@@ -11,6 +11,7 @@ the channel encoder; manifest-driven normalization is deferred to M4+.
 from __future__ import annotations
 
 import glob
+import random
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
@@ -22,6 +23,8 @@ from torch.utils.data import DataLoader, IterableDataset
 from nid_video.data.labeling import collapse_to_13
 from nid_video.data.split import SplitName, WindowKey, load_splits
 from nid_video.utils import logger
+
+EpochEndStrategy = Literal["slow_exhausted", "max_len"]
 
 LabelMode = Literal["raw15", "collapsed13"]
 NUM_CLASSES_RAW = 15
@@ -149,12 +152,106 @@ class NidShardDataset(IterableDataset):
 
 
 def _collate(batch: list[dict]) -> dict:
-    """Stack tensors / labels; keep meta as a list of per-sample dicts."""
-    return {
+    """Stack tensors / labels; keep meta as a list of per-sample dicts.
+
+    If samples carry ``scale_id`` (multi-scale path), it is stacked into a
+    (B,) long tensor for the model's scale-token forward.
+    """
+    out: dict = {
         "tensor": torch.stack([b["tensor"] for b in batch], dim=0),
         "label": torch.stack([b["label"] for b in batch], dim=0),
         "meta": [b["meta"] for b in batch],
     }
+    if "scale_id" in batch[0]:
+        out["scale_id"] = torch.stack([b["scale_id"] for b in batch], dim=0)
+    return out
+
+
+class MultiScaleNidDataset(IterableDataset):
+    """50/50 (configurable) mix of fast (Δt=100ms) and slow (Δt=1s) shards.
+
+    Each yielded sample carries ``scale_id`` ∈ {0=fast, 1=slow}. The model's
+    scale-token forward (``VideoMAESmallForNID.forward``) reads it.
+
+    Idea.md M4 task 4.2 decision: option (a) — two physically independent
+    shard sets, no aggregation. Per-sample mixing is done in Python via a
+    worker-seeded ``random.Random``; webdataset's own shard splitting handles
+    multi-worker non-overlap on each underlying NidShardDataset.
+
+    Args:
+      fast_pattern / slow_pattern: shard globs for the two scales.
+      mix_ratio: P(fast). 0.5 by default.
+      epoch_end_strategy: how to terminate when the two streams have
+        different lengths.
+
+        * ``"slow_exhausted"`` (default): epoch ends at the FIRST
+          ``StopIteration`` from either stream. In practice the slow
+          stream goes first since it's ~10× sparser. Simple and
+          deterministic; the cost is that fast samples beyond the slow
+          stream's length are not seen this epoch.
+        * ``"max_len"``: reserved for future revisits, raises
+          NotImplementedError.
+
+      seed: base RNG seed; per-worker offset added by ``__iter__``.
+    """
+
+    def __init__(
+        self,
+        fast_pattern: str | Path | list[str],
+        slow_pattern: str | Path | list[str],
+        *,
+        mix_ratio: float = 0.5,
+        label_mode: LabelMode = "collapsed13",
+        shuffle_buffer: int = 1000,
+        splits_path: Path | str | None = None,
+        keep_split: SplitName | None = None,
+        seed: int = 42,
+        epoch_end_strategy: EpochEndStrategy = "slow_exhausted",
+    ) -> None:
+        if not 0.0 <= mix_ratio <= 1.0:
+            raise ValueError(f"mix_ratio must be in [0, 1], got {mix_ratio}")
+        if epoch_end_strategy != "slow_exhausted":
+            raise NotImplementedError(
+                f"epoch_end_strategy={epoch_end_strategy!r} not implemented. "
+                f"Only 'slow_exhausted' is supported; 'max_len' is reserved."
+            )
+        self.fast = NidShardDataset(
+            fast_pattern, label_mode=label_mode, shuffle_buffer=shuffle_buffer,
+            splits_path=splits_path, keep_split=keep_split,
+        )
+        self.slow = NidShardDataset(
+            slow_pattern, label_mode=label_mode, shuffle_buffer=shuffle_buffer,
+            splits_path=splits_path, keep_split=keep_split,
+        )
+        self.mix_ratio = float(mix_ratio)
+        self.seed = int(seed)
+        self.epoch_end_strategy: EpochEndStrategy = epoch_end_strategy
+        logger.info(
+            f"MultiScaleNidDataset: mix_ratio={mix_ratio}, seed={seed}, "
+            f"epoch_end_strategy={epoch_end_strategy}"
+        )
+
+    def __iter__(self) -> Iterator[dict]:
+        winfo = torch.utils.data.get_worker_info()
+        worker_seed = self.seed + (winfo.id if winfo is not None else 0)
+        rng = random.Random(worker_seed)
+        fast_iter = iter(self.fast)
+        slow_iter = iter(self.slow)
+
+        while True:
+            if rng.random() < self.mix_ratio:
+                try:
+                    sample = next(fast_iter)
+                except StopIteration:
+                    return
+                sample["scale_id"] = torch.tensor(0, dtype=torch.long)
+            else:
+                try:
+                    sample = next(slow_iter)
+                except StopIteration:
+                    return
+                sample["scale_id"] = torch.tensor(1, dtype=torch.long)
+            yield sample
 
 
 def build_dataloader(
@@ -169,11 +266,13 @@ def build_dataloader(
     pin_memory: bool = True,
     drop_last: bool = False,
 ) -> DataLoader:
-    """Standard DataLoader over :class:`NidShardDataset`.
+    """Standard DataLoader over :class:`NidShardDataset` (single-scale).
 
     With ``num_workers > 0`` webdataset's default node/worker shard splitting
     ensures each shard is read by exactly one worker (no duplicate samples).
     Pass ``splits_path`` + ``keep_split`` to restrict to one split.
+
+    For multi-scale training (M4) use ``build_multi_scale_dataloader``.
     """
     ds = NidShardDataset(
         shard_pattern=shard_pattern,
@@ -181,6 +280,49 @@ def build_dataloader(
         shuffle_buffer=shuffle_buffer,
         splits_path=splits_path,
         keep_split=keep_split,
+    )
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        collate_fn=_collate,
+        drop_last=drop_last,
+        persistent_workers=(num_workers > 0),
+    )
+
+
+def build_multi_scale_dataloader(
+    fast_pattern: str | Path | list[str],
+    slow_pattern: str | Path | list[str],
+    *,
+    batch_size: int = 2,
+    num_workers: int = 0,
+    label_mode: LabelMode = "collapsed13",
+    shuffle_buffer: int = 1000,
+    mix_ratio: float = 0.5,
+    splits_path: Path | str | None = None,
+    keep_split: SplitName | None = None,
+    seed: int = 42,
+    epoch_end_strategy: EpochEndStrategy = "slow_exhausted",
+    pin_memory: bool = True,
+    drop_last: bool = False,
+) -> DataLoader:
+    """DataLoader over :class:`MultiScaleNidDataset` (M4).
+
+    Yields batches with ``scale_id`` (B,) alongside ``tensor`` / ``label`` /
+    ``meta``. ``scale_id`` is consumed by ``VideoMAESmallForNID.forward``.
+    """
+    ds = MultiScaleNidDataset(
+        fast_pattern=fast_pattern,
+        slow_pattern=slow_pattern,
+        mix_ratio=mix_ratio,
+        label_mode=label_mode,
+        shuffle_buffer=shuffle_buffer,
+        splits_path=splits_path,
+        keep_split=keep_split,
+        seed=seed,
+        epoch_end_strategy=epoch_end_strategy,
     )
     return DataLoader(
         ds,

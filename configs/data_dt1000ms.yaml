@@ -1,0 +1,7 @@
+# Slow-scale ETL config for M4 multi-scale training.
+# Inherits from base.yaml; only overrides delta_t_ms.
+# Idea.md M4 task 4.2 decision: option (a) — two physically independent
+# shard sets, no aggregation. T=16, H=32, W=64, overlap=0.5 unchanged.
+extends: base.yaml
+data:
+  delta_t_ms: 1000

@@ -185,9 +185,15 @@ class Trainer:
         for micro_idx, batch in enumerate(self.train_loader):
             x = batch["tensor"].to(self.device, non_blocking=True)
             y = batch["label"].to(self.device, non_blocking=True)
+            # Multi-scale path attaches scale_id (B,) per sample. Single-scale
+            # legacy path doesn't — default to fast (0).
+            if "scale_id" in batch:
+                scale_id = batch["scale_id"].to(self.device, non_blocking=True)
+            else:
+                scale_id = torch.zeros(x.size(0), dtype=torch.long, device=self.device)
 
             with torch.autocast(device_type=self.device, dtype=self.amp_dtype, enabled=self.amp_enabled):
-                out = self.model(x)
+                out = self.model(x, scale_id=scale_id)
                 raw_loss = self.criterion(out["logits"], y)
 
             scaled_loss = raw_loss / self.grad_accum
