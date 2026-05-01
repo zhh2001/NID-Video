@@ -206,6 +206,7 @@ class LabelIndex:
         *,
         dayfirst: bool = False,
         csv_tz: str = "America/Halifax",
+        csv_twelve_hour_pm_inference: bool = True,
     ) -> "LabelIndex":
         """Build from one or more CSV paths.
 
@@ -217,6 +218,11 @@ class LabelIndex:
             ever needed for UNSW-NB15). Wall-clock CSV times are localized to
             this zone and converted to UTC. DST is handled by zoneinfo.
             Default Halifax matches CIC-IDS-2017's recording site.
+          csv_twelve_hour_pm_inference: enable CIC-IDS-2017's 12h-without-AM/PM
+            timestamp recovery (hours 1..7 shifted +12h, see ``_absorb`` for
+            full reasoning). Default True. Disable for datasets that already
+            use 24h or carry explicit AM/PM markers — without this flag the
+            wrong-direction shift would silently break those data sources.
         """
         if isinstance(paths, Path):
             paths = [paths]
@@ -224,7 +230,10 @@ class LabelIndex:
         for p in paths:
             p = Path(p)
             df = _load_label_csv(p)
-            idx._absorb(df, source=p.name, dayfirst=dayfirst, csv_tz=csv_tz)
+            idx._absorb(
+                df, source=p.name, dayfirst=dayfirst, csv_tz=csv_tz,
+                csv_twelve_hour_pm_inference=csv_twelve_hour_pm_inference,
+            )
         logger.info(
             f"LabelIndex built: {idx._n_flows} flows across {idx.n_keys} 5-tuples"
         )
@@ -239,7 +248,7 @@ class LabelIndex:
         return self._n_flows
 
     def _absorb(self, df: pd.DataFrame, source: str, dayfirst: bool,
-                csv_tz: str) -> None:
+                csv_tz: str, csv_twelve_hour_pm_inference: bool) -> None:
         required = ["Source IP", "Source Port", "Destination IP", "Destination Port",
                     "Protocol", "Timestamp", "Flow Duration", "Label"]
         missing = [c for c in required if c not in df.columns]
@@ -266,6 +275,44 @@ class LabelIndex:
             )
             df = df.loc[~bad_mask].reset_index(drop=True)
             ts = ts.loc[~bad_mask].reset_index(drop=True)
+
+        # CIC-IDS-2017 CSVs use 12-hour format WITHOUT AM/PM markers, encoding
+        # the period implicitly in the hour range. ``pd.to_datetime`` parses
+        # "2:54" as 02:54 (2:54 AM), but in CIC it actually means 14:54
+        # (2:54 PM); the 12h offset makes every PM CSV row miss its pcap
+        # packet by 12 hours. Discovered M4 task 4.7 — see Findings M4-001.
+        #
+        # Boundary reasoning (CIC working hours 09:00–17:00 ADT, never midnight):
+        #   hour ∈ [1, 7]  → afternoon (PM, → 13:00–19:00 in 24h): add 12 hours
+        #   hour ∈ [8, 11] → morning   (AM,    08:00–11:00 in 24h): unchanged
+        #   hour == 12     → noon      (PM,    12:00      in 24h): unchanged
+        #                    (12:00 AM = midnight is excluded by working hours;
+        #                     12:00 PM is noon, which equals 12:00 24h, so no shift)
+        #   hour == 0      → unexpected (CIC never captures midnight); warn.
+        #
+        # The shift MUST happen on naive datetimes BEFORE tz_localize. Doing it
+        # after timezone conversion would crisscross the offset with DST and
+        # bury the bug in another layer.
+        #
+        # Configurable: set csv_twelve_hour_pm_inference=False on LabelIndex
+        # build for datasets that already use 24h or carry explicit AM/PM.
+        if csv_twelve_hour_pm_inference:
+            hours = ts.dt.hour
+            n_zero = int((hours == 0).sum())
+            if n_zero > 0:
+                logger.warning(
+                    f"{source}: {n_zero} rows with hour=0 (CIC working hours "
+                    f"never include midnight). Possible data quality issue or "
+                    f"wrong 12h-inference assumption for this dataset."
+                )
+            needs_pm_shift = hours.between(1, 7)
+            n_shift = int(needs_pm_shift.sum())
+            if n_shift > 0:
+                ts = ts + pd.to_timedelta(needs_pm_shift.astype(int) * 12, unit="h")
+                logger.info(
+                    f"{source}: {n_shift} rows with hour∈[1,7] shifted +12h "
+                    f"(CIC 12h-without-AM/PM PM inference)"
+                )
 
         # Convert wall-clock CSV strings to UTC unix epoch. CIC-IDS-2017
         # records local Atlantic time (ADT in July, DST-aware); pcap ts is

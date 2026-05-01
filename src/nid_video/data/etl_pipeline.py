@@ -82,6 +82,7 @@ def run_etl(
     limit_windows: int | None = None,
     csv_dayfirst: bool = True,
     csv_tz: str = "America/Halifax",
+    csv_twelve_hour_pm_inference: bool = True,
     label_index: LabelIndex | None = None,
 ) -> EtlStats:
     """Run single-process ETL across the provided pcaps.
@@ -97,6 +98,9 @@ def run_etl(
       csv_tz: IANA tz of the wall-clock timestamps in the CSV. Default
         "America/Halifax" matches CIC-IDS-2017; pass "UTC" for synthetic
         fixtures whose timestamps are already UTC.
+      csv_twelve_hour_pm_inference: enable CIC-IDS-2017's 12h-no-AM/PM
+        recovery (hours 1..7 shifted +12h). Default True. See
+        ``LabelIndex._absorb`` for the boundary reasoning.
       label_index: optional pre-built index (test/multi-worker re-use).
 
     Failed pcaps are logged and skipped — they don't crash the run.
@@ -108,7 +112,10 @@ def run_etl(
 
     if label_index is None:
         csvs = [Path(p) for p in label_csv_paths]
-        label_index = LabelIndex.from_csv(csvs, dayfirst=csv_dayfirst, csv_tz=csv_tz)
+        label_index = LabelIndex.from_csv(
+            csvs, dayfirst=csv_dayfirst, csv_tz=csv_tz,
+            csv_twelve_hour_pm_inference=csv_twelve_hour_pm_inference,
+        )
 
     port_map = build_port_mapping(data_config.num_port_buckets)
     channel_cfg = ChannelConfig.from_data_config(data_config)

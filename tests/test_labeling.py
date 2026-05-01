@@ -558,3 +558,185 @@ def test_warn_low_population_skips_benign_and_returns_low_classes(caplog) -> Non
 def test_label_to_id_alias_points_at_raw() -> None:
     """The default LABEL_TO_ID is the RAW table — keeps existing call sites stable."""
     assert LABEL_TO_ID is LABEL_TO_ID_RAW
+
+
+def _make_single_row_csv(
+    tmp_path: Path,
+    timestamp_str: str,
+    *,
+    sip: str = "10.0.0.1", sport: int = 12345,
+    dip: str = "10.0.0.99", dport: int = 80, proto: int = 6,
+    duration_us: int = 1_000_000, label: str = "DDoS",
+    name: str = "labels.csv",
+) -> Path:
+    """Build a one-row CSV containing the given timestamp string. Bytes-level
+    write so the timestamp string is preserved exactly (no pandas reformatting)."""
+    csv = tmp_path / name
+    header = (b" Source IP, Source Port, Destination IP, Destination Port,"
+              b" Protocol, Timestamp, Flow Duration, Label\n")
+    line = (
+        f"{sip},{sport},{dip},{dport},{proto},{timestamp_str},{duration_us},{label}\n"
+    ).encode()
+    csv.write_bytes(header + line)
+    return csv
+
+
+def _stored_unix_for(idx: LabelIndex, sip: str = "10.0.0.1",
+                     sport: int = 12345, dip: str = "10.0.0.99",
+                     dport: int = 80, proto: int = 6) -> float:
+    """Pull back the stored start_ts for a single-flow LabelIndex."""
+    flows = idx._index[(sip, sport, dip, dport, proto)]
+    assert len(flows) == 1, f"expected exactly 1 flow, got {len(flows)}"
+    return flows[0].start_ts
+
+
+# ---------------------------------------------------------------------------
+# 12h-without-AM/PM inference (M4 task 4.7, Finding M4-001)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("hour", [1, 2, 3, 4, 5, 6, 7])
+def test_hour_in_pm_range_gets_shifted_plus_twelve(tmp_path: Path, hour: int) -> None:
+    """Hours 1..7 are CIC's afternoon (PM); inference must add 12h.
+
+    Verifies via UTC unix offset: hour-shifted ADT vs unshifted ADT differ by
+    exactly 12 hours."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    csv = _make_single_row_csv(tmp_path, f"7/7/2017 {hour}:30:00", name=f"h{hour}.csv")
+    idx = LabelIndex.from_csv(csv, dayfirst=True, csv_tz="America/Halifax")
+    got_unix = _stored_unix_for(idx)
+
+    # Expected: shift +12 → hour+12 in 24h, then ADT→UTC
+    expected_local = dt.datetime(
+        2017, 7, 7, hour + 12, 30, 0, tzinfo=ZoneInfo("America/Halifax"),
+    )
+    expected_unix = expected_local.timestamp()
+    assert got_unix == pytest.approx(expected_unix, abs=1.0), (
+        f"hour={hour} (PM) should map to {hour+12}:30 ADT, "
+        f"got unix={got_unix:.0f} vs expected {expected_unix:.0f}"
+    )
+
+
+@pytest.mark.parametrize("hour", [8, 9, 10, 11])
+def test_hour_in_am_range_unchanged(tmp_path: Path, hour: int) -> None:
+    """Hours 8..11 are CIC's morning (AM); inference leaves them alone."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    csv = _make_single_row_csv(tmp_path, f"7/7/2017 {hour}:30:00", name=f"h{hour}.csv")
+    idx = LabelIndex.from_csv(csv, dayfirst=True, csv_tz="America/Halifax")
+    got_unix = _stored_unix_for(idx)
+
+    expected_local = dt.datetime(
+        2017, 7, 7, hour, 30, 0, tzinfo=ZoneInfo("America/Halifax"),
+    )
+    expected_unix = expected_local.timestamp()
+    assert got_unix == pytest.approx(expected_unix, abs=1.0), (
+        f"hour={hour} (AM) must remain {hour}:30 ADT, "
+        f"got unix={got_unix:.0f} vs expected {expected_unix:.0f}"
+    )
+
+
+def test_hour_12_unchanged_as_noon(tmp_path: Path) -> None:
+    """12:xx in CIC is noon (12 PM = 12:00 24h), not midnight (12 AM = 0:00).
+    Inference must leave 12:xx alone (hour 12 already represents 12:00 24h)."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    csv = _make_single_row_csv(tmp_path, "7/7/2017 12:30:00", name="h12.csv")
+    idx = LabelIndex.from_csv(csv, dayfirst=True, csv_tz="America/Halifax")
+    got_unix = _stored_unix_for(idx)
+
+    expected_local = dt.datetime(
+        2017, 7, 7, 12, 30, 0, tzinfo=ZoneInfo("America/Halifax"),
+    )
+    expected_unix = expected_local.timestamp()
+    assert got_unix == pytest.approx(expected_unix, abs=1.0)
+
+
+def test_hour_0_warns_but_unchanged(tmp_path: Path) -> None:
+    """Hour 0 (midnight) is impossible per CIC working hours.
+    Inference must warn AND leave the hour alone (we don't have a confident
+    interpretation, so the safe default is to pass-through and surface)."""
+    import datetime as dt
+    import io
+    from zoneinfo import ZoneInfo
+    from nid_video.utils import logger as loguru_logger
+
+    csv = _make_single_row_csv(tmp_path, "7/7/2017 0:30:00", name="h0.csv")
+    sink = io.StringIO()
+    handler_id = loguru_logger.add(sink, level="WARNING")
+    try:
+        idx = LabelIndex.from_csv(csv, dayfirst=True, csv_tz="America/Halifax")
+    finally:
+        loguru_logger.remove(handler_id)
+
+    log = sink.getvalue()
+    assert "hour=0" in log, log
+    assert "midnight" in log.lower() or "working hours" in log.lower(), log
+
+    got_unix = _stored_unix_for(idx)
+    expected_local = dt.datetime(
+        2017, 7, 7, 0, 30, 0, tzinfo=ZoneInfo("America/Halifax"),
+    )
+    assert got_unix == pytest.approx(expected_local.timestamp(), abs=1.0)
+
+
+def test_inference_disabled_passes_through(tmp_path: Path) -> None:
+    """csv_twelve_hour_pm_inference=False: even hour ∈ [1,7] is left alone.
+    For datasets that don't share CIC's 12h-without-AM/PM quirk."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    # Hour 3 would normally shift to 15. With inference off, it stays 3.
+    csv = _make_single_row_csv(tmp_path, "7/7/2017 3:30:00", name="h3_no_inf.csv")
+    idx = LabelIndex.from_csv(
+        csv, dayfirst=True, csv_tz="America/Halifax",
+        csv_twelve_hour_pm_inference=False,
+    )
+    got_unix = _stored_unix_for(idx)
+
+    expected_local = dt.datetime(
+        2017, 7, 7, 3, 30, 0, tzinfo=ZoneInfo("America/Halifax"),
+    )
+    expected_unix = expected_local.timestamp()
+    assert got_unix == pytest.approx(expected_unix, abs=1.0)
+
+
+def test_real_csv_friday_afternoon_ddos_hour_range_after_fix(tmp_path: Path) -> None:
+    """Synthetic CSV mimicking CIC Friday-Afternoon-DDos.csv pattern: every
+    row has hour ∈ {3, 4} (the actual hour values seen in the real CIC file
+    per the M4.7 diagnostic). After the 12h-inference fix, the stored
+    UTC unix timestamps must correspond to ADT 15:xx-16:xx (the documented
+    CIC DDoS attack window 15:56-16:16)."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    csv = tmp_path / "fake_friday_ddos.csv"
+    header = (b" Source IP, Source Port, Destination IP, Destination Port,"
+              b" Protocol, Timestamp, Flow Duration, Label\n")
+    rows = b""
+    # 4 rows with hour 3, 4 with hour 4 — matching the real CSV's pattern
+    for i, h in enumerate([3, 3, 3, 3, 4, 4, 4, 4]):
+        rows += (
+            f"172.16.0.{i+1},5{i:04d},192.168.10.50,80,6,"
+            f"7/7/2017 {h}:{(i*7)%60:02d}:00,1000000,DDoS\n"
+        ).encode()
+    csv.write_bytes(header + rows)
+
+    idx = LabelIndex.from_csv(csv, dayfirst=True, csv_tz="America/Halifax")
+    # Pull all unix timestamps and check ADT hour
+    all_hours_adt = []
+    for flows in idx._index.values():
+        for f in flows:
+            local = dt.datetime.fromtimestamp(f.start_ts, tz=dt.timezone.utc) \
+                               .astimezone(ZoneInfo("America/Halifax"))
+            all_hours_adt.append(local.hour)
+
+    assert sorted(set(all_hours_adt)) == [15, 16], (
+        f"After 12h fix, Friday-PM-DDoS hours should be in {{15, 16}}, "
+        f"got {sorted(set(all_hours_adt))}"
+    )
+    assert all(h in (15, 16) for h in all_hours_adt)
