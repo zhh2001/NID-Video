@@ -282,9 +282,10 @@ def test_multi_scale_deterministic_under_same_seed(fast_and_slow_shards) -> None
 def test_multi_scale_slow_exhausted_strategy_stops_at_slow_end(
     fast_and_slow_shards,
 ) -> None:
-    """``epoch_end_strategy='slow_exhausted'`` (the M4.2 default): iteration
-    ends as soon as the slow stream (2 samples) is empty. Fast has 20 samples
-    but most are not seen — that's the documented intended behaviour."""
+    """Legacy ``epoch_end_strategy='slow_exhausted'``: iteration ends as soon
+    as the slow stream (2 samples) is empty. Fast has 20 samples but we don't
+    drain all of them. Kept as an option for fast debug runs; not the default
+    since M4.8 (the M4.7→4.8 round_robin redesign)."""
     fast, slow = fast_and_slow_shards
     ds = MultiScaleNidDataset(
         fast, slow, mix_ratio=0.5, shuffle_buffer=0,
@@ -299,6 +300,95 @@ def test_multi_scale_slow_exhausted_strategy_stops_at_slow_end(
     assert n_slow <= 2, f"slow over-drawn: {n_slow}"
     # We did NOT drain all 20 fast samples — slow ran out first.
     assert n_fast < 20, f"fast was drained ({n_fast}); slow_exhausted didn't trigger"
+
+
+def test_multi_scale_round_robin_strategy_cycles_slow_until_fast_done(
+    fast_and_slow_shards,
+) -> None:
+    """``round_robin``: epoch ends when FAST is exhausted; slow is cycled
+    (re-iterated from start) whenever drained. Fast=20, slow=2, mix=0.5
+    → expect ~40 samples total: full fast + slow cycled multiple times.
+    The last sample is a fast sample (fast exhaustion ends the epoch)."""
+    fast, slow = fast_and_slow_shards
+    ds = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=42,
+        epoch_end_strategy="round_robin",
+    )
+    samples = list(ds)
+    n_fast = sum(1 for s in samples if int(s["scale_id"].item()) == 0)
+    n_slow = sum(1 for s in samples if int(s["scale_id"].item()) == 1)
+
+    # Fast must be fully drained — that's the round_robin termination signal.
+    assert n_fast == 20, f"round_robin should drain fast exactly; got n_fast={n_fast}"
+    # Slow must have been cycled multiple times (>= 4 of its 2-sample cycle
+    # → 8+ slow yields). With mix=0.5 and n_fast=20 we expect ~20 slow draws.
+    assert n_slow > 5, f"slow should have cycled multiple times; got n_slow={n_slow}"
+    # The very last sample triggered fast exhaustion → must be a fast sample.
+    assert int(samples[-1]["scale_id"].item()) == 0, (
+        "round_robin terminator should be a fast-stream exhaustion, "
+        "but last sample is from slow stream"
+    )
+
+
+def test_multi_scale_round_robin_is_default_strategy(fast_and_slow_shards) -> None:
+    """No explicit ``epoch_end_strategy`` → round_robin (M4.8 default).
+    Equivalent behaviour to passing ``epoch_end_strategy='round_robin'``
+    explicitly: fast fully drained, slow cycled."""
+    fast, slow = fast_and_slow_shards
+    ds_default = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=42,
+    )
+    ds_explicit = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=42,
+        epoch_end_strategy="round_robin",
+    )
+    seq_default = [int(s["scale_id"].item()) for s in ds_default]
+    seq_explicit = [int(s["scale_id"].item()) for s in ds_explicit]
+    assert seq_default == seq_explicit
+
+
+def test_multi_scale_round_robin_slow_reshuffles_each_cycle(
+    fast_and_slow_shards, tmp_path: Path,
+) -> None:
+    """When ``shuffle_buffer > 0`` is set on the underlying NidShardDataset,
+    each ``iter()`` reseeds the webdataset shuffle. Under round_robin, slow
+    gets re-iterated multiple times — the per-cycle ordering of slow samples
+    should not be identical across cycles (they're each a fresh shuffle)."""
+    # Build slow stream with 8 samples + non-zero shuffle_buffer
+    slow_dir = tmp_path / "slow_shuffle"
+    _write_shards(slow_dir, [3, 9, 3, 9, 3, 9, 3, 9], maxcount=4)
+    slow_pat = str(slow_dir / "shard-*.tar")
+    fast_dir = tmp_path / "fast_shuffle"
+    _write_shards(fast_dir, list(range(20)), maxcount=10)
+    fast_pat = str(fast_dir / "shard-*.tar")
+
+    ds = MultiScaleNidDataset(
+        fast_pat, slow_pat, mix_ratio=0.5, shuffle_buffer=4,
+        label_mode="raw15", seed=42,
+        epoch_end_strategy="round_robin",
+    )
+    # Walk samples, collect each "slow cycle" (groups of 8 contiguous slow
+    # samples between fast samples are not what we want — we want to compare
+    # the order across separate iter() rebuilds). The simplest check: gather
+    # all slow labels, count how many cycles fit, verify per-cycle pattern.
+    slow_labels = [int(s["label"].item()) for s in ds if int(s["scale_id"].item()) == 1]
+    # We expect >= 16 slow yields (= 2+ full cycles of 8 samples).
+    if len(slow_labels) < 16:
+        # Skip if insufficient cycles produced; the assertion below would be vacuous.
+        pytest.skip(f"only {len(slow_labels)} slow labels collected; need >= 16 for cycle-comparison")
+    first_cycle = tuple(slow_labels[:8])
+    second_cycle = tuple(slow_labels[8:16])
+    # If shuffle reseeded, per-cycle order differs. The labels are [3,9,...]×4
+    # so equality of the ordered tuples after shuffle is unlikely (4 of each
+    # → 70 unique permutations, P(identical) ≈ 1.4%). Probabilistic but pin.
+    # If the test is flaky, that itself flags a determinism regression.
+    assert first_cycle != second_cycle, (
+        "two consecutive slow cycles produced identical order; "
+        "shuffle_buffer reshuffle on iter() rebuild may have regressed"
+    )
 
 
 def test_multi_scale_dataloader_collates_scale_id_into_batch(fast_and_slow_shards) -> None:
