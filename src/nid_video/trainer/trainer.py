@@ -15,9 +15,11 @@ Out of scope (deferred to M4 later tasks):
 
 from __future__ import annotations
 
+import math
 import random
+import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +30,7 @@ from safetensors.torch import save_file
 from torch import nn
 from torch.utils.data import DataLoader
 
+from nid_video.trainer.evaluator import Evaluator
 from nid_video.trainer.scheduler import make_cosine_scheduler
 from nid_video.utils import logger
 from nid_video.utils.config import TrainingConfig
@@ -80,6 +83,11 @@ class Trainer:
         warmup_steps: int = 500,
         total_steps: int | None = None,
         min_lr_ratio: float = 0.01,
+        val_loader: DataLoader | None = None,
+        num_classes: int = 13,
+        eval_every: int = 1,
+        track_best_metric: str = "macro_f1",
+        class_names: Sequence[str] | None = None,
     ) -> None:
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -146,6 +154,25 @@ class Trainer:
         # Memory cost: 8 bytes/step → ~400 KB for 50k-step real training.
         self.step_losses: list[float] = []
 
+        # M4 task 4.5: optional eval + best-model selection.
+        self.eval_every = max(1, int(eval_every))
+        self.track_best_metric = track_best_metric
+        self.class_names = list(class_names) if class_names is not None else None
+        self._best_metric_value: float = -math.inf
+        self._best_ckpt_path: Path | None = None
+        self.eval_history: list[dict] = []   # appended each eval
+        if val_loader is not None:
+            self.evaluator: Evaluator | None = Evaluator(
+                model=self.model, val_loader=val_loader,
+                num_classes=int(num_classes), device=device,
+            )
+            logger.info(
+                f"Evaluator wired: track_best_metric={self.track_best_metric}, "
+                f"eval_every={self.eval_every}, num_classes={num_classes}"
+            )
+        else:
+            self.evaluator = None
+
         logger.info(
             f"Trainer ready: device={device}, precision={config.precision}, "
             f"optimizer={config.optimizer}, lr={config.lr}, wd={config.weight_decay}, "
@@ -202,10 +229,39 @@ class Trainer:
                 f"micro_steps={self.global_micro_step} grad_steps={self.global_grad_step} ==="
             )
 
+            # M4 task 4.5: eval + best-model selection BEFORE checkpoint save,
+            # so the checkpoint can record the eval-determined best status.
+            is_best = False
+            if self.evaluator is not None and (epoch + 1) % self.eval_every == 0:
+                metrics = self.evaluator.evaluate()
+                self.evaluator.pretty_print(metrics, class_names=self.class_names)
+                self.eval_history.append({"epoch": epoch, **metrics})
+                if self.track_best_metric not in metrics:
+                    raise KeyError(
+                        f"track_best_metric={self.track_best_metric!r} not in "
+                        f"evaluator output keys {sorted(metrics.keys())}"
+                    )
+                metric_val = float(metrics[self.track_best_metric])
+                # Strict greater-than tiebreak: don't re-copy when metric
+                # plateaus (avoids late-epoch I/O thrash with small lr).
+                is_best = metric_val > self._best_metric_value
+                if is_best:
+                    self._best_metric_value = metric_val
+                    logger.info(
+                        f"new best {self.track_best_metric}={metric_val:.4f} "
+                        f"at epoch {epoch}"
+                    )
+
             ckpt_path = self.ckpt_dir / f"epoch_{epoch}_step_{self.global_grad_step}.pt"
             self.save_checkpoint(ckpt_path, epoch)
             ckpts.append(ckpt_path)
             self._resumed_from_epoch = epoch   # record completion for re-resume
+
+            if is_best:
+                # Plain copy (not symlink) for Windows/WSL2 portability.
+                self._best_ckpt_path = self.ckpt_dir / "best.pt"
+                shutil.copyfile(ckpt_path, self._best_ckpt_path)
+                logger.info(f"best.pt updated → {self._best_ckpt_path}")
 
             if max_steps is not None and self.global_micro_step >= max_steps:
                 logger.info(f"--max-steps {max_steps} reached; stopping early")

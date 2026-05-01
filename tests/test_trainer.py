@@ -372,6 +372,136 @@ def test_load_checkpoint_newer_schema_version_raises(tmp_path: Path) -> None:
         t2.load_checkpoint(ckpt_path)
 
 
+# ---------------------------------------------------------------------------
+# M4 task 4.5: Evaluator + best-model selection integration
+# ---------------------------------------------------------------------------
+
+
+class _FakeEvaluator:
+    """Stub evaluator used by best-ckpt tests so we don't need a real val
+    loader. The trainer only reads ``evaluate()`` output + ``pretty_print``."""
+
+    def __init__(self, scores: list[float]) -> None:
+        self._scores = list(scores)
+        self._idx = 0
+
+    def evaluate(self) -> dict:
+        s = self._scores[self._idx]
+        self._idx += 1
+        return {
+            "accuracy": s,
+            "macro_f1": s,
+            "auroc_macro": s,
+            "per_class_f1": np.zeros(13),
+            "per_class_precision": np.zeros(13),
+            "per_class_recall": np.zeros(13),
+            "per_class_auroc": np.zeros(13),
+            "confusion_matrix": np.zeros((13, 13), dtype=int),
+            "n_samples": 0,
+            "n_per_class": np.zeros(13, dtype=int),
+        }
+
+    def pretty_print(self, metrics: dict, class_names=None) -> None:
+        pass
+
+
+def _build_trainer_for_eval_test(tmp_path: Path, *, run_subdir: str = "run",
+                                 fake_scores: list[float]) -> Trainer:
+    from nid_video.data.dataset import _collate
+    cfg = _base_training_config(
+        precision="fp32", optimizer="adamw",
+        gradient_checkpointing=False,
+        batch_size=1, grad_accumulation=1, num_epochs=len(fake_scores),
+    )
+    model = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                                gradient_checkpointing=False)
+    ds = _FixedSamples(n=2)
+    loader = torch.utils.data.DataLoader(
+        ds, batch_size=1, shuffle=False, collate_fn=_collate,
+    )
+    t = Trainer(
+        model=model, train_loader=loader, config=cfg,
+        device="cpu", run_dir=tmp_path / run_subdir,
+        warmup_steps=1, total_steps=20, min_lr_ratio=0.1,
+        # val_loader=None so Trainer doesn't build a real Evaluator
+    )
+    # Inject a fake evaluator AFTER construction
+    t.evaluator = _FakeEvaluator(fake_scores)
+    t.track_best_metric = "macro_f1"
+    return t
+
+
+def test_trainer_eval_runs_at_epoch_boundary_when_val_loader_set(tmp_path: Path) -> None:
+    """Each epoch ends with eval + entry appended to ``trainer.eval_history``."""
+    _seed_all(42)
+    t = _build_trainer_for_eval_test(tmp_path, run_subdir="r1",
+                                     fake_scores=[0.1, 0.2, 0.3])
+    t.train(num_epochs=3, log_every=10)
+    assert len(t.eval_history) == 3
+    assert [e["macro_f1"] for e in t.eval_history] == [0.1, 0.2, 0.3]
+    assert all(e["epoch"] == i for i, e in enumerate(t.eval_history))
+
+
+def test_trainer_best_ckpt_is_copied_when_metric_improves(tmp_path: Path) -> None:
+    """best.pt copy fires every time macro_f1 strictly improves."""
+    _seed_all(42)
+    t = _build_trainer_for_eval_test(tmp_path, run_subdir="r1",
+                                     fake_scores=[0.1, 0.5, 0.9])
+    t.train(num_epochs=3, log_every=10)
+    best = t.run_dir / "ckpt" / "best.pt"
+    assert best.is_file()
+    # best.pt must hold the LAST improvement (epoch 2, score 0.9)
+    ckpt = torch.load(str(best), map_location="cpu", weights_only=False)
+    assert ckpt["epoch"] == 2
+
+
+def test_trainer_best_ckpt_not_changed_when_metric_drops(tmp_path: Path) -> None:
+    """If a later epoch's macro_f1 is worse, best.pt stays at the earlier value."""
+    _seed_all(42)
+    t = _build_trainer_for_eval_test(tmp_path, run_subdir="r1",
+                                     fake_scores=[0.5, 0.9, 0.2])
+    t.train(num_epochs=3, log_every=10)
+    best = t.run_dir / "ckpt" / "best.pt"
+    ckpt = torch.load(str(best), map_location="cpu", weights_only=False)
+    # epoch 1 was the best (0.9); epoch 2 dropped to 0.2 → best.pt unchanged
+    assert ckpt["epoch"] == 1
+
+
+def test_trainer_best_ckpt_uses_strict_greater_than_not_equal(tmp_path: Path) -> None:
+    """Strict ``>``: a tying epoch should NOT trigger a re-copy. Verifies
+    the late-epoch I/O thrash mitigation."""
+    _seed_all(42)
+    t = _build_trainer_for_eval_test(tmp_path, run_subdir="r1",
+                                     fake_scores=[0.5, 0.5, 0.5])
+    t.train(num_epochs=3, log_every=10)
+    best = t.run_dir / "ckpt" / "best.pt"
+    ckpt = torch.load(str(best), map_location="cpu", weights_only=False)
+    # All three epochs tied at 0.5; only the FIRST should have triggered
+    # the best-copy (subsequent equal-valued epochs are not strictly >).
+    assert ckpt["epoch"] == 0
+
+
+def test_trainer_eval_disabled_when_no_val_loader(tmp_path: Path) -> None:
+    """No val_loader → no Evaluator → no eval, no eval_history, no best.pt."""
+    _seed_all(42)
+    t = _build_trainer_for_resume_test(tmp_path, run_subdir="r1")
+    t.train(num_epochs=1, log_every=10)
+    assert t.evaluator is None
+    assert t.eval_history == []
+    assert not (t.run_dir / "ckpt" / "best.pt").exists()
+
+
+def test_trainer_unknown_track_best_metric_raises_at_eval_time(tmp_path: Path) -> None:
+    """A typo in track_best_metric should fail at eval time with a clear
+    KeyError, not silently track nothing."""
+    _seed_all(42)
+    t = _build_trainer_for_eval_test(tmp_path, run_subdir="r1",
+                                     fake_scores=[0.5])
+    t.track_best_metric = "macro_f1_typo"
+    with pytest.raises(KeyError, match="track_best_metric"):
+        t.train(num_epochs=1, log_every=10)
+
+
 @pytest.mark.slow
 def test_grad_accumulation_math_skipped() -> None:
     """TODO: Verify that batch=2/accum=4 vs batch=8/accum=1 produces the same
