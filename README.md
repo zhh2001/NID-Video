@@ -5,7 +5,7 @@
 > to a VideoMAE-Small backbone, so the model sees how communication patterns
 > co-evolve in space and time — not just static snapshots.
 
-The full design rationale lives in `prompts/Idea.md` (untracked). This README
+The full design rationale lives in [docs/Idea.md](docs/Idea.md). This README
 only covers how to set the project up and run things.
 
 ---

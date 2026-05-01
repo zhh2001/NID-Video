@@ -113,17 +113,39 @@ build profile is more valuable than 3× ETL speedup.
 
 ## Output sizing
 
-Per sample on disk (rough numbers from synthetic runs):
-- `tensor.npy`: `16 × 6 × 32 × 64 × 4 B` = 768 KB raw, ~150 KB after tar gzip
+Per sample on disk (M4.7 real-data run on CIC-IDS-2017 100ms shards;
+synthetic estimates in parentheses):
+
+- `tensor.npy`: `16 × 6 × 32 × 64 × 4 B` = **768 KB raw, written uncompressed**
+  to the tar archive (the synthetic-run gzip-tar estimate of ~150 KB is no
+  longer used — the float32 tensor is incompressible enough that gzip cost did
+  not pay back the read latency in our shard pipeline; see decision in M2 task
+  2.7). Effective per-sample disk ≈ 770 KB after tar metadata overhead.
 - `label.cls`: 1–2 bytes
 - `meta.json`: ~150 bytes
 
-Per window the dominant cost is the tensor; ~150 KB compressed * 40 500 windows
-≈ **5.8 GB** for the Tue+Wed+Fri dataset, distributed across ~40 shards of
-~1 000 samples each.
+Real-data totals on the Tue+Wed+Fri 100ms+1s subset (after the M4.7 12h fix,
+v2 ETL run):
+
+| Δt   | windows  | shards | total disk |
+|------|---------:|-------:|-----------:|
+| 100ms| 110,783  | 113    | **~82 GB** |
+| 1s   |  11,074  |  ~12   |   ~8.5 GB  |
+| **combined** | — | — | **~90 GB** |
+
+The 82 GB at 100ms is materially larger than the 5.8 GB synthetic projection
+because (a) we no longer gzip the tar, (b) real CIC pcap density is denser
+than the 1500-pps synthetic average, and (c) tube-patch overlap + dominant-rule
+labelling produce ~2.7× more windows per second of capture than the M2
+projection assumed. The 1s slow-scale shard set is roughly 10× sparser by
+construction. See `docs/v1_vs_v2_comparison.md` for the v1 (pre-fix) vs v2
+(post-fix) per-class breakdown — the on-disk sizing is identical between v1
+and v2 (deterministic windowing on the same pcaps); only label assignment
+changes.
 
 ## Update log
 
 | Date | Run | Result |
 |---|---|---|
 | 2026-04-25 | initial benchmark on dev box | 18.2k pps / 22 win/s / 46 ms per window |
+| 2026-04-29 | M4.7 v2 ETL on real CIC-IDS-2017 Tue+Wed+Fri 100ms after the 12h-without-AM/PM fix | 110,783 windows / 113 shards / 82 GB / 71.3 min wall time (3 workers); see `docs/v1_vs_v2_comparison.md` for the per-class delta |

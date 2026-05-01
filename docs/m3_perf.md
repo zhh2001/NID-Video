@@ -5,6 +5,23 @@ All measurements use `pretrained=None` (random VideoMAE-S init) so model
 weights are deterministic across runs; the input volume on the GPU is the same
 either way.
 
+> **Update (M4.7 / 2026-04-30 — real-data run on CIC-IDS-2017):** the
+> synthetic-pcap projections in this doc held in shape but were off in
+> magnitude. Total windows on the actual Tue+Wed+Fri 100ms subset came in at
+> **110,783** (vs the M2 estimate of ~40 500) once the tube-patch overlap and
+> dominant-rule labelling were applied to real bursty traffic; per-sample
+> tensor disk cost is **770 KB raw** uncompressed (vs the synthetic estimate of
+> ~150 KB after gzip — we now write tar without gzip, see
+> `docs/etl_performance.md`). Total subset on disk: **82 GB** (vs 5.8 GB
+> projection). End-to-end ETL throughput dropped from the synthetic
+> 281 sps / 22 win/s to **125 sps / ~23 win/s** on real data, primarily because
+> CIC traffic has long bursts of small packets that load each window heavier
+> than the 833-pkt synthetic estimate. The M3 perf-sweep numbers below are
+> still correct for what they measure (synthetic input, model-side memory and
+> throughput) and remain the right reference for batch-size + AMP + GC
+> ablations; the **memory headroom verdict is unchanged** — M4.8 single-epoch
+> peak GPU was 485 MB on `training_perf.yaml` (B=32 / accum=1 / workers=2).
+
 > **Re-scoped after the M3 task 3.4 demo measured 0.20 GB peak.** The 8 GB ceiling
 > is comfortably distant — the relevant question shifted from "do we fit?" to
 > "what configuration maximizes throughput given memory is abundant?".
