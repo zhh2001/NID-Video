@@ -84,6 +84,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="Glob to slow-scale (Δt=1s) shards. Pair with --shard-pattern-fast.")
     g.add_argument("--mix-ratio", type=float, default=0.5,
                    help="P(fast sample) for MultiScaleNidDataset. Default 0.5.")
+    g.add_argument("--epoch-end-strategy",
+                   choices=["round_robin", "slow_exhausted"],
+                   default="round_robin",
+                   help="When fast and slow streams have different lengths, which "
+                        "exhaustion ends the epoch. 'round_robin' (default since "
+                        "M4.8): fast is anchor, slow cycles. 'slow_exhausted' "
+                        "(legacy): epoch ends on first stream exhaustion. The "
+                        "choice changes total_steps via the M5.1 fix in "
+                        "_compute_total_steps.")
 
     # ----- splits + eval -----
     p.add_argument("--splits-path", type=Path, default=None,
@@ -164,30 +173,140 @@ def _override_for_debug(training_cfg):
     })
 
 
+def _total_steps_from_train_n(
+    train_n: int,
+    *,
+    batch_size: int,
+    grad_accumulation: int,
+    num_epochs: int,
+    mix_ratio: float | None = None,
+    epoch_end_strategy: str | None = None,
+) -> int:
+    """Pure-math LR scheduler total_steps from the *anchor stream*'s train count.
+
+    The "anchor" is the stream whose exhaustion ends the epoch. Per-call
+    semantics:
+
+    * ``mix_ratio is None`` → single-scale. ``train_n`` is the only stream;
+      ``anchor_n = train_n``.
+    * ``mix_ratio`` set, ``epoch_end_strategy == "round_robin"`` (M4.8 default)
+      → fast stream is anchor. Caller passes ``train_n_fast``.
+      ``anchor_n = ceil(train_n_fast / mix_ratio)`` (with mix=0.5, the slow
+      stream contributes the other half of yields, so total samples per epoch
+      is ~2× the fast stream).
+    * ``mix_ratio`` set, ``epoch_end_strategy == "slow_exhausted"`` (M4.2
+      legacy) → slow stream is anchor. Caller passes ``train_n_slow``.
+      ``anchor_n = ceil(train_n_slow / (1 - mix_ratio))``.
+
+    Returns ``ceil(anchor_n / (batch_size × grad_accumulation)) × num_epochs``.
+
+    The M5.1 fix this function ships: pre-M5.1, the caller passed
+    ``train_n_fast`` (counted from splits.parquet) but used the single-scale
+    formula, which under-counted total_steps by ``1/mix_ratio`` (~2× under
+    round_robin), causing cosine decay to bottom out mid-epoch.
+    """
+    if mix_ratio is None:
+        anchor_n = int(train_n)
+    elif epoch_end_strategy == "round_robin":
+        anchor_n = math.ceil(train_n / max(mix_ratio, 1e-9))
+    elif epoch_end_strategy == "slow_exhausted":
+        anchor_n = math.ceil(train_n / max(1.0 - mix_ratio, 1e-9))
+    else:
+        raise ValueError(
+            f"epoch_end_strategy must be 'round_robin' or 'slow_exhausted' "
+            f"when mix_ratio is set; got {epoch_end_strategy!r}"
+        )
+    steps_per_epoch = max(
+        1, math.ceil(anchor_n / max(1, batch_size * grad_accumulation))
+    )
+    return steps_per_epoch * num_epochs
+
+
+def _count_train_in_slow_shards(slow_pattern: str, splits: dict) -> int:
+    """Count slow-shard windows whose (pcap_source, start_time) maps to the
+    'train' split. Required for ``slow_exhausted`` total_steps because the
+    splits.parquet was built on fast (100ms) shards — the slow (1s) train
+    count is not available without scanning.
+    """
+    from nid_video.data.split import collect_window_keys_from_shards
+    n = 0
+    for kvl in collect_window_keys_from_shards(slow_pattern):
+        if splits.get(kvl.key) == "train":
+            n += 1
+    return n
+
+
 def _compute_total_steps(args: argparse.Namespace, training_cfg) -> int | None:
     """Compute LR scheduler total_steps. Priority:
        1. --total-steps explicit
-       2. ceil(train_n / (B * accum)) * num_epochs from splits.parquet
-       3. None → Trainer's own num_epochs * 1000 heuristic + WARNING
+       2. ``_total_steps_from_train_n`` driven by splits.parquet, with the
+          anchor stream picked by ``--epoch-end-strategy`` (M5.1 fix)
+       3. None → Trainer's own num_epochs × 1000 heuristic + WARNING
     """
     if args.total_steps is not None:
         return args.total_steps
-    if args.splits_path is not None and args.splits_path.is_file():
-        from nid_video.data.split import load_splits
-        splits = load_splits(args.splits_path)
+    if args.splits_path is None or not args.splits_path.is_file():
+        return None
+
+    from nid_video.data.split import load_splits
+    splits = load_splits(args.splits_path)
+    n_epochs = args.num_epochs if args.num_epochs is not None else training_cfg.num_epochs
+    is_multi = args.shard_pattern_fast is not None
+
+    if not is_multi:
         train_n = sum(1 for v in splits.values() if v == "train")
-        n_epochs = args.num_epochs if args.num_epochs is not None else training_cfg.num_epochs
-        steps_per_epoch = max(
-            1,
-            math.ceil(train_n / max(1, training_cfg.batch_size * training_cfg.grad_accumulation))
+        total = _total_steps_from_train_n(
+            train_n,
+            batch_size=training_cfg.batch_size,
+            grad_accumulation=training_cfg.grad_accumulation,
+            num_epochs=n_epochs,
         )
-        total = steps_per_epoch * n_epochs
         logger.info(
-            f"total_steps = {total} (computed: train_n={train_n}, "
+            f"total_steps = {total} (single-scale: train_n={train_n}, "
             f"batch={training_cfg.batch_size}, accum={training_cfg.grad_accumulation}, "
-            f"steps/epoch={steps_per_epoch}, epochs={n_epochs})"
+            f"epochs={n_epochs})"
         )
         return total
+
+    # Multi-scale: anchor depends on epoch_end_strategy. M5.1 fix.
+    if args.epoch_end_strategy == "round_robin":
+        # splits.parquet was built on 100ms fast shards → train_n directly.
+        train_n_fast = sum(1 for v in splits.values() if v == "train")
+        total = _total_steps_from_train_n(
+            train_n_fast,
+            batch_size=training_cfg.batch_size,
+            grad_accumulation=training_cfg.grad_accumulation,
+            num_epochs=n_epochs,
+            mix_ratio=args.mix_ratio,
+            epoch_end_strategy="round_robin",
+        )
+        logger.info(
+            f"total_steps = {total} (multi-scale round_robin: "
+            f"train_n_fast={train_n_fast}, mix_ratio={args.mix_ratio}, "
+            f"batch={training_cfg.batch_size}, accum={training_cfg.grad_accumulation}, "
+            f"epochs={n_epochs})"
+        )
+        return total
+
+    if args.epoch_end_strategy == "slow_exhausted":
+        # Need to scan the slow shards to count train-tagged 1s windows.
+        train_n_slow = _count_train_in_slow_shards(args.shard_pattern_slow, splits)
+        total = _total_steps_from_train_n(
+            train_n_slow,
+            batch_size=training_cfg.batch_size,
+            grad_accumulation=training_cfg.grad_accumulation,
+            num_epochs=n_epochs,
+            mix_ratio=args.mix_ratio,
+            epoch_end_strategy="slow_exhausted",
+        )
+        logger.info(
+            f"total_steps = {total} (multi-scale slow_exhausted: "
+            f"train_n_slow={train_n_slow}, mix_ratio={args.mix_ratio}, "
+            f"batch={training_cfg.batch_size}, accum={training_cfg.grad_accumulation}, "
+            f"epochs={n_epochs})"
+        )
+        return total
+
     return None
 
 
@@ -215,6 +334,7 @@ def _build_loaders(
                 splits_path=args.splits_path,
                 keep_split=args.keep_split,
                 mix_ratio=args.mix_ratio,
+                epoch_end_strategy=args.epoch_end_strategy,
                 **common,
             )
         else:
@@ -234,6 +354,7 @@ def _build_loaders(
             splits_path=args.splits_path,
             keep_split="train" if args.splits_path else None,
             mix_ratio=args.mix_ratio,
+            epoch_end_strategy=args.epoch_end_strategy,
             **common,
         )
         val_loader = None
@@ -244,6 +365,7 @@ def _build_loaders(
                 splits_path=args.splits_path,
                 keep_split="val",
                 mix_ratio=args.mix_ratio,
+                epoch_end_strategy=args.epoch_end_strategy,
                 **common,
             )
     else:
