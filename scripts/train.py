@@ -42,6 +42,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="FP32 + vanilla AdamW + no grad checkpointing (sanity run)")
     p.add_argument("--pretrained", default="MCG-NJU/videomae-small-finetuned-kinetics",
                    help="HF model id, or '' / 'none' to skip pretraining")
+    p.add_argument("--resume", type=Path, default=None,
+                   help="Resume from a .pt checkpoint produced by save_checkpoint. "
+                        "Restores model + optimizer + scheduler + scaler + RNG.")
+    p.add_argument("--export-safetensors", type=Path, default=None,
+                   help="After training, export final model weights (only) to "
+                        "this safetensors path for deployment.")
     return p.parse_args(argv)
 
 
@@ -91,7 +97,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         config=training,
         device=args.device,
     )
+    if args.resume is not None:
+        if not args.resume.is_file():
+            logger.error(f"--resume path does not exist: {args.resume}")
+            return 2
+        trainer.load_checkpoint(args.resume)
+
     result = trainer.train(num_epochs=args.num_epochs, max_steps=args.max_steps)
+
+    if args.export_safetensors is not None:
+        trainer.export_model_safetensors(args.export_safetensors)
 
     logger.info("=" * 78)
     logger.info(f"  Final avg loss : {result.final_avg_loss:.4f}")

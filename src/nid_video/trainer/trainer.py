@@ -15,12 +15,14 @@ Out of scope (deferred to M4 later tasks):
 
 from __future__ import annotations
 
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import torch
 from safetensors.torch import save_file
 from torch import nn
@@ -29,6 +31,11 @@ from torch.utils.data import DataLoader
 from nid_video.trainer.scheduler import make_cosine_scheduler
 from nid_video.utils import logger
 from nid_video.utils.config import TrainingConfig
+
+# Schema version for the .pt checkpoint dict. Bumped when the on-disk layout
+# changes in a way that requires a code-side migration (not just adding a new
+# optional field — those are forward-compat).
+CHECKPOINT_SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -129,6 +136,15 @@ class Trainer:
         self.grad_accum = max(1, int(config.grad_accumulation))
         self.global_micro_step = 0
         self.global_grad_step = 0
+        # If a checkpoint was loaded, this records the last fully-completed
+        # epoch so train() skips epochs that already finished. -1 means "no
+        # epoch completed yet" (fresh trainer).
+        self._resumed_from_epoch: int = -1
+        # Per-micro-step raw-loss trace. Populated by _train_one_epoch.
+        # Used by determinism tests (M4 task 4.4 acceptance) — the resume
+        # path must produce element-wise identical losses to a continuous run.
+        # Memory cost: 8 bytes/step → ~400 KB for 50k-step real training.
+        self.step_losses: list[float] = []
 
         logger.info(
             f"Trainer ready: device={device}, precision={config.precision}, "
@@ -164,7 +180,16 @@ class Trainer:
         ckpts: list[Path] = []
         epoch_avg_losses: list[float] = []
 
-        for epoch in range(n_epochs):
+        # If we resumed from epoch K, train() should run epochs K+1..n_epochs-1.
+        # Fresh trainers have _resumed_from_epoch=-1 → start at 0.
+        start_epoch = self._resumed_from_epoch + 1
+        if start_epoch > 0:
+            logger.info(
+                f"resuming from epoch {self._resumed_from_epoch}; "
+                f"training epochs {start_epoch}..{n_epochs - 1}"
+            )
+
+        for epoch in range(start_epoch, n_epochs):
             avg_loss, t_epoch = self._train_one_epoch(epoch, max_steps, log_every)
             epoch_avg_losses.append(avg_loss)
             peak_mb = (
@@ -177,9 +202,10 @@ class Trainer:
                 f"micro_steps={self.global_micro_step} grad_steps={self.global_grad_step} ==="
             )
 
-            ckpt_path = self.ckpt_dir / f"epoch_{epoch}.safetensors"
+            ckpt_path = self.ckpt_dir / f"epoch_{epoch}_step_{self.global_grad_step}.pt"
             self.save_checkpoint(ckpt_path, epoch)
             ckpts.append(ckpt_path)
+            self._resumed_from_epoch = epoch   # record completion for re-resume
 
             if max_steps is not None and self.global_micro_step >= max_steps:
                 logger.info(f"--max-steps {max_steps} reached; stopping early")
@@ -230,8 +256,10 @@ class Trainer:
             else:
                 scaled_loss.backward()
 
-            loss_sum += float(raw_loss.detach().item())
+            raw_loss_val = float(raw_loss.detach().item())
+            loss_sum += raw_loss_val
             loss_n += 1
+            self.step_losses.append(raw_loss_val)
 
             grad_norm: float | None = None
             do_step = (micro_idx + 1) % self.grad_accum == 0
@@ -279,28 +307,176 @@ class Trainer:
     # Checkpoint
     # ------------------------------------------------------------------
 
-    def save_checkpoint(self, path: Path, epoch: int) -> None:
-        """Save model state_dict to safetensors.
+    def save_checkpoint(self, path: Path, epoch: int, *, step: int | None = None) -> None:
+        """Persist full training state for resume (M4 task 4.4).
 
-        M3 saves model weights only; optimizer state is deferred to M4 (resume)
-        because bitsandbytes 8-bit optimizer state isn't safetensors-friendly
-        without dequantization, and M3's prompt explicitly says resume is M4.
+        Single ``.pt`` file. Contents (schema v1):
+
+          - ``model``           : ``model.state_dict()``
+          - ``optimizer``       : ``optimizer.state_dict()`` (8-bit AdamW
+                                  state is serializable but only restorable
+                                  back into the same optimizer class)
+          - ``scheduler``       : ``LambdaLR.state_dict()`` (the lambda
+                                  closure itself is not persisted; rebuild
+                                  uses ``scheduler_config`` below)
+          - ``scaler``          : ``GradScaler.state_dict()`` or ``None``
+          - ``epoch``, ``global_grad_step``, ``global_micro_step``
+          - ``rng``             : torch / cuda / numpy / python RNG states
+          - ``training_config`` : pydantic ``model_dump()`` of
+                                  ``TrainingConfig`` for sanity check on load
+          - ``scheduler_config``: warmup_steps / total_steps / min_lr_ratio
+                                  needed to rebuild LambdaLR with the
+                                  matching lambda
+          - ``schema_version``  : int, currently 1
+
+        We use ``torch.save`` (pickle), not safetensors, because optimizer
+        and RNG state are non-tensor Python objects. For deployment-only
+        exports (model weights only) use :meth:`export_model_safetensors`.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # safetensors requires contiguous tensors and disallows shared storage.
+        if step is None:
+            step = self.global_grad_step
+        ckpt = {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict() if self.scaler is not None else None,
+            "epoch": int(epoch),
+            "global_grad_step": int(self.global_grad_step),
+            "global_micro_step": int(self.global_micro_step),
+            "scheduler_config": {
+                "warmup_steps": self.warmup_steps,
+                "total_steps": self.total_steps,
+                "min_lr_ratio": self.min_lr_ratio,
+            },
+            "training_config": self.config.model_dump(),
+            "rng": {
+                "python": random.getstate(),
+                "numpy": np.random.get_state(),
+                "torch": torch.get_rng_state(),
+                "torch_cuda": (
+                    torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
+                ),
+            },
+        }
+        torch.save(ckpt, str(path))
+        size_mb = path.stat().st_size / (1024 * 1024)
+        logger.info(
+            f"checkpoint saved: {path} ({size_mb:.1f} MB) — "
+            f"epoch={epoch}, grad_step={step}"
+        )
+
+    def load_checkpoint(self, path: Path) -> None:
+        """Restore full training state from a ``.pt`` checkpoint.
+
+        Forward-compat policy:
+          - Unknown extra fields are ignored (do not raise).
+          - Missing optional fields fall back to safe defaults.
+          - ``schema_version`` newer than this code's
+            ``CHECKPOINT_SCHEMA_VERSION`` raises explicitly — refusing to
+            misread a future format is safer than silent best-effort.
+          - Model state loads with ``strict=False`` so M3 ckpts (no
+            scale_token / scale_embedding) still resume cleanly.
+        """
+        path = Path(path)
+        # weights_only=False because the dict contains non-tensor python
+        # objects (rng state, optimizer state). The file is trusted (we wrote
+        # it ourselves on the same machine).
+        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+
+        version = ckpt.get("schema_version", 0)
+        if version > CHECKPOINT_SCHEMA_VERSION:
+            raise ValueError(
+                f"checkpoint schema_version={version} newer than this code's "
+                f"CHECKPOINT_SCHEMA_VERSION={CHECKPOINT_SCHEMA_VERSION}; "
+                f"refusing to read"
+            )
+
+        # Model — strict=False for M3-from-M4 (missing scale_token etc).
+        missing, unexpected = self.model.load_state_dict(ckpt["model"], strict=False)
+        if missing:
+            logger.info(f"load_checkpoint: model missing keys: {list(missing)[:5]}{'...' if len(missing) > 5 else ''}")
+        if unexpected:
+            logger.warning(f"load_checkpoint: model unexpected keys: {list(unexpected)[:5]}")
+
+        # Optimizer
+        self.optimizer.load_state_dict(ckpt["optimizer"])
+
+        # Scheduler — uses the lambda from THIS Trainer's make_cosine_scheduler;
+        # only last_epoch and counter state come from the ckpt.
+        self.scheduler.load_state_dict(ckpt["scheduler"])
+
+        # Scaler — only restore if both sides have one
+        scaler_state = ckpt.get("scaler")
+        if scaler_state is not None and self.scaler is not None:
+            self.scaler.load_state_dict(scaler_state)
+        elif scaler_state is not None and self.scaler is None:
+            logger.warning(
+                "load_checkpoint: ckpt has GradScaler state but current trainer has none "
+                "(precision changed?); skipping"
+            )
+        elif scaler_state is None and self.scaler is not None:
+            logger.warning(
+                "load_checkpoint: ckpt has no GradScaler state but current trainer has one; "
+                "scaler will keep its fresh-init state"
+            )
+
+        # RNG — restore all four. Use .get() with defaults for forward-compat
+        # against checkpoints that didn't capture cuda state.
+        rng = ckpt.get("rng", {})
+        if "python" in rng:
+            random.setstate(rng["python"])
+        if "numpy" in rng:
+            np.random.set_state(rng["numpy"])
+        if "torch" in rng:
+            torch.set_rng_state(rng["torch"])
+        if "torch_cuda" in rng and torch.cuda.is_available() and rng["torch_cuda"]:
+            torch.cuda.set_rng_state_all(rng["torch_cuda"])
+
+        # Counters + resume marker
+        self.global_grad_step = int(ckpt.get("global_grad_step", 0))
+        self.global_micro_step = int(ckpt.get("global_micro_step", 0))
+        self._resumed_from_epoch = int(ckpt.get("epoch", -1))
+
+        # Sanity check: scheduler_config must match what we built with.
+        sc = ckpt.get("scheduler_config", {})
+        for k, expected in (("warmup_steps", self.warmup_steps),
+                            ("total_steps", self.total_steps),
+                            ("min_lr_ratio", self.min_lr_ratio)):
+            if k in sc and sc[k] != expected:
+                logger.warning(
+                    f"load_checkpoint: scheduler_config.{k} mismatch — "
+                    f"ckpt={sc[k]} vs current trainer={expected}. "
+                    f"This will cause lr-curve drift; rebuild trainer with "
+                    f"matching scheduler args before resume."
+                )
+
+        logger.info(
+            f"checkpoint loaded: {path} — epoch={self._resumed_from_epoch}, "
+            f"grad_step={self.global_grad_step}, micro_step={self.global_micro_step}"
+        )
+
+    def export_model_safetensors(self, path: Path) -> None:
+        """Export model weights only to safetensors for deployment.
+
+        Distinct from :meth:`save_checkpoint`: that saves training state
+        (optimizer/scheduler/RNG/...); this writes only the model
+        ``state_dict`` in a safetensors file suitable for inference-only
+        environments that don't ship pickle/torch.save trust.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         state = {k: v.detach().cpu().contiguous() for k, v in self.model.state_dict().items()}
         save_file(
-            state,
-            str(path),
+            state, str(path),
             metadata={
-                "epoch": str(epoch),
+                "format": "safetensors-deploy",
                 "precision": self.config.precision,
                 "optimizer": self.config.optimizer,
-                "batch_size": str(self.config.batch_size),
-                "grad_accumulation": str(self.config.grad_accumulation),
                 "lr": str(self.config.lr),
             },
         )
         size_mb = path.stat().st_size / (1024 * 1024)
-        logger.info(f"checkpoint saved: {path} ({size_mb:.1f} MB)")
+        logger.info(f"model weights exported (safetensors): {path} ({size_mb:.1f} MB)")
