@@ -24,7 +24,7 @@ from nid_video.data.labeling import collapse_to_13
 from nid_video.data.split import SplitName, WindowKey, load_splits
 from nid_video.utils import logger
 
-EpochEndStrategy = Literal["slow_exhausted", "round_robin", "max_len"]
+EpochEndStrategy = Literal["slow_exhausted", "round_robin", "no_cycle", "max_len"]
 
 LabelMode = Literal["raw15", "collapsed13"]
 NUM_CLASSES_RAW = 15
@@ -184,18 +184,29 @@ class MultiScaleNidDataset(IterableDataset):
       epoch_end_strategy: how to terminate when the two streams have
         different lengths.
 
-        * ``"round_robin"`` (M4 default since 4.8 fix): epoch ends when
-          the **fast** stream is exhausted; the slow stream is cycled
-          (re-iterated from the start) whenever it's drained. Achieves
-          full fast-stream coverage and balanced 50/50 multi-scale
-          exposure regardless of length asymmetry.
-        * ``"slow_exhausted"`` (initial M4.2 design, now optional): epoch
-          ends at the FIRST ``StopIteration`` from either stream.
+        * ``"round_robin"`` (training default since the 4.8 fix): the
+          epoch ends when the **fast** stream is exhausted; the slow
+          stream is cycled (re-iterated from the start) whenever it's
+          drained. Achieves full fast-stream coverage and balanced
+          50/50 multi-scale exposure regardless of length asymmetry.
+          This is correct for training but introduces ~±0.04 metric
+          variance under eval because the slow stream's per-cycle
+          re-shuffle changes which slow samples land in which batch.
+        * ``"slow_exhausted"`` (initial 4.2 design, now optional): the
+          epoch ends at the FIRST ``StopIteration`` from either stream.
           Concretely, that's slow first since slow is ~10× sparser.
-          Discovered in M4.8 to starve fast (62K of 77K samples never
+          Discovered in 4.8 to starve fast (62K of 77K samples never
           seen) and abort training mid-warmup. Kept as an option for
           fast debug runs where the small effective epoch is desirable.
-        * ``"max_len"``: reserved for M5/M6, raises NotImplementedError.
+        * ``"no_cycle"`` (eval default): both streams are drained
+          exactly once with no re-iteration. After one stream
+          exhausts, draws continue exclusively from the other until
+          it also exhausts, then iteration ends. Each unique sample
+          is yielded exactly once and the total yield count is
+          ``fast_n + slow_n`` regardless of ``mix_ratio`` — the
+          property that makes eval metrics comparable across runs
+          and across mix-ratio settings.
+        * ``"max_len"``: reserved, raises NotImplementedError.
 
       seed: base RNG seed; per-worker offset added by ``__iter__``.
     """
@@ -215,12 +226,13 @@ class MultiScaleNidDataset(IterableDataset):
     ) -> None:
         if not 0.0 <= mix_ratio <= 1.0:
             raise ValueError(f"mix_ratio must be in [0, 1], got {mix_ratio}")
-        if epoch_end_strategy not in ("round_robin", "slow_exhausted"):
+        if epoch_end_strategy not in ("round_robin", "slow_exhausted", "no_cycle"):
             raise NotImplementedError(
                 f"epoch_end_strategy={epoch_end_strategy!r} not implemented. "
-                f"Supported: 'round_robin' (default, cycle slow until fast done) "
-                f"or 'slow_exhausted' (legacy, stop at first exhaustion). "
-                f"'max_len' is reserved for M5/M6."
+                f"Supported: 'round_robin' (training default, cycle slow), "
+                f"'slow_exhausted' (legacy, stop at first exhaustion), "
+                f"'no_cycle' (eval default, drain both streams exactly once). "
+                f"'max_len' is reserved."
             )
         self.fast = NidShardDataset(
             fast_pattern, label_mode=label_mode, shuffle_buffer=shuffle_buffer,
@@ -245,26 +257,51 @@ class MultiScaleNidDataset(IterableDataset):
         fast_iter = iter(self.fast)
         slow_iter = iter(self.slow)
 
+        # State-machine flags only used by ``no_cycle``. Round_robin and
+        # slow_exhausted reach their termination conditions earlier (inside
+        # the slow-side StopIteration handler) so the flags stay False.
+        fast_done = False
+        slow_done = False
+
         while True:
-            if rng.random() < self.mix_ratio:
-                # Fast stream — its exhaustion ends the epoch under round_robin
-                # (the slow stream's full coverage is incidental, fast is the
-                # primary data signal).
+            # Stream selection. Under no_cycle, once a stream is exhausted we
+            # force draws from the other side until it too exhausts; both
+            # exhaustions then trigger the outer return below.
+            if self.epoch_end_strategy == "no_cycle" and fast_done and slow_done:
+                return
+            if self.epoch_end_strategy == "no_cycle" and fast_done:
+                draw_fast = False
+            elif self.epoch_end_strategy == "no_cycle" and slow_done:
+                draw_fast = True
+            else:
+                draw_fast = rng.random() < self.mix_ratio
+
+            if draw_fast:
+                # Fast stream — under round_robin its exhaustion ends the
+                # epoch (the slow stream's full coverage is incidental, fast
+                # is the primary data signal). Under no_cycle it just sets
+                # the fast_done flag.
                 try:
                     sample = next(fast_iter)
                 except StopIteration:
+                    if self.epoch_end_strategy == "no_cycle":
+                        fast_done = True
+                        continue
                     return
                 sample["scale_id"] = torch.tensor(0, dtype=torch.long)
             else:
-                # Slow stream — cycle (re-init iter) under round_robin; in
-                # slow_exhausted mode the cycle's StopIteration on a freshly
-                # rebuilt iterator (i.e. an empty stream) is a real "no slow
-                # data at all" signal and ends the epoch.
+                # Slow stream — under round_robin the iterator is rebuilt on
+                # exhaustion (cycling); under slow_exhausted the first
+                # StopIteration ends the epoch; under no_cycle it sets the
+                # slow_done flag.
                 try:
                     sample = next(slow_iter)
                 except StopIteration:
                     if self.epoch_end_strategy == "slow_exhausted":
                         return
+                    if self.epoch_end_strategy == "no_cycle":
+                        slow_done = True
+                        continue
                     # round_robin: rebuild the slow iterator and try once more.
                     slow_iter = iter(self.slow)
                     try:

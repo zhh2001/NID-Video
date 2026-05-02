@@ -85,14 +85,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     g.add_argument("--mix-ratio", type=float, default=0.5,
                    help="P(fast sample) for MultiScaleNidDataset. Default 0.5.")
     g.add_argument("--epoch-end-strategy",
-                   choices=["round_robin", "slow_exhausted"],
+                   choices=["round_robin", "slow_exhausted", "no_cycle"],
                    default="round_robin",
-                   help="When fast and slow streams have different lengths, which "
-                        "exhaustion ends the epoch. 'round_robin' (default since "
-                        "M4.8): fast is anchor, slow cycles. 'slow_exhausted' "
-                        "(legacy): epoch ends on first stream exhaustion. The "
-                        "choice changes total_steps via the M5.1 fix in "
-                        "_compute_total_steps.")
+                   help="Train-side stream-termination policy. 'round_robin' "
+                        "(default): fast is anchor, slow cycles — correct for "
+                        "training where coverage matters more than uniqueness. "
+                        "'slow_exhausted' (legacy): epoch ends on first stream "
+                        "exhaustion. 'no_cycle': drain both streams exactly "
+                        "once (typically used as an eval value via "
+                        "--eval-strategy, not here). The choice changes "
+                        "total_steps via _compute_total_steps.")
+    g.add_argument("--eval-strategy",
+                   choices=["round_robin", "slow_exhausted", "no_cycle"],
+                   default="no_cycle",
+                   help="Eval-side stream-termination policy, applied to the "
+                        "val loader (and the eval-only loader). Default "
+                        "'no_cycle' yields each unique val sample exactly "
+                        "once and gives metric numbers that don't depend on "
+                        "mix_ratio. Override only to reproduce a legacy run.")
 
     # ----- splits + eval -----
     p.add_argument("--splits-path", type=Path, default=None,
@@ -327,6 +337,8 @@ def _build_loaders(
 
     if for_eval_only:
         # Pure eval — build only val (or test) loader on requested split.
+        # The eval-only path is, by definition, an eval-mode loader, so it
+        # uses --eval-strategy regardless of --epoch-end-strategy.
         if is_multi:
             val_loader = build_multi_scale_dataloader(
                 fast_pattern=args.shard_pattern_fast,
@@ -334,7 +346,7 @@ def _build_loaders(
                 splits_path=args.splits_path,
                 keep_split=args.keep_split,
                 mix_ratio=args.mix_ratio,
-                epoch_end_strategy=args.epoch_end_strategy,
+                epoch_end_strategy=args.eval_strategy,
                 **common,
             )
         else:
@@ -359,13 +371,16 @@ def _build_loaders(
         )
         val_loader = None
         if args.splits_path is not None:
+            # Val loader uses --eval-strategy (decoupled from training-side
+            # --epoch-end-strategy). Default no_cycle yields each unique
+            # val sample exactly once for metric stability.
             val_loader = build_multi_scale_dataloader(
                 fast_pattern=args.shard_pattern_fast,
                 slow_pattern=args.shard_pattern_slow,
                 splits_path=args.splits_path,
                 keep_split="val",
                 mix_ratio=args.mix_ratio,
-                epoch_end_strategy=args.epoch_end_strategy,
+                epoch_end_strategy=args.eval_strategy,
                 **common,
             )
     else:

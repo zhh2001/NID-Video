@@ -428,3 +428,121 @@ def test_collate_handles_scale_id_when_present() -> None:
     out = _collate([a, b])
     assert "scale_id" in out
     assert out["scale_id"].tolist() == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# no_cycle strategy: drain both streams exactly once (eval default)
+# ---------------------------------------------------------------------------
+
+
+def test_multi_scale_no_cycle_yields_each_sample_at_most_once(
+    fast_and_slow_shards,
+) -> None:
+    """Under no_cycle no sample is yielded more than once. fast=20, slow=2,
+    mix=0.5 — pull every sample, key by (scale_id, label) which is unique
+    per fast sample (labels 0/1 alternating) and per slow sample (labels
+    3/9). No duplicate keys allowed.
+
+    Stronger pin than the round_robin "shuffle reseeds each cycle" check:
+    for round_robin, slow labels do repeat (cycled); for no_cycle, they
+    must not repeat at all."""
+    fast, slow = fast_and_slow_shards
+    ds = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=42,
+        epoch_end_strategy="no_cycle",
+    )
+    samples = list(ds)
+    # Slow has only 2 samples (labels {3, 9}). Under no_cycle, slow_n_yielded
+    # must be ≤ 2; if 2, we got both of them and no duplicate.
+    slow_yields = [int(s["label"].item()) for s in samples
+                   if int(s["scale_id"].item()) == 1]
+    assert len(slow_yields) <= 2, (
+        f"slow yielded {len(slow_yields)} times under no_cycle; expected ≤ 2"
+    )
+    if len(slow_yields) == 2:
+        assert sorted(slow_yields) == [3, 9], (
+            f"slow yields under no_cycle should be {{3, 9}} once each; "
+            f"got {slow_yields}"
+        )
+
+
+def test_multi_scale_no_cycle_drains_both_streams(fast_and_slow_shards) -> None:
+    """Under no_cycle both streams are drained exactly. fast=20, slow=2,
+    mix=0.5 → expect exactly 22 yields total (20 fast + 2 slow). Even
+    though mix_ratio=0.5 would normally pick slow ~half the time, after
+    slow exhausts the iterator forces all remaining draws onto fast (and
+    vice versa), so both streams reach their natural end."""
+    fast, slow = fast_and_slow_shards
+    ds = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=42,
+        epoch_end_strategy="no_cycle",
+    )
+    samples = list(ds)
+    n_fast = sum(1 for s in samples if int(s["scale_id"].item()) == 0)
+    n_slow = sum(1 for s in samples if int(s["scale_id"].item()) == 1)
+    assert n_fast == 20, f"fast under no_cycle should drain to 20; got {n_fast}"
+    assert n_slow == 2, f"slow under no_cycle should drain to 2; got {n_slow}"
+    assert len(samples) == 22, f"total under no_cycle should be 22; got {len(samples)}"
+
+
+def test_multi_scale_no_cycle_terminates_when_both_exhausted(
+    fast_and_slow_shards,
+) -> None:
+    """no_cycle must terminate — list(ds) returns a finite list, no infinite
+    loop even with extreme mix_ratio settings that bias one stream heavily."""
+    fast, slow = fast_and_slow_shards
+    for mix in (0.1, 0.5, 0.9):
+        ds = MultiScaleNidDataset(
+            fast, slow, mix_ratio=mix, shuffle_buffer=0,
+            label_mode="raw15", seed=42,
+            epoch_end_strategy="no_cycle",
+        )
+        samples = list(ds)             # must not hang
+        assert len(samples) == 22, (
+            f"no_cycle total drift at mix={mix}: got {len(samples)} samples, "
+            f"expected 22 (20 fast + 2 slow)"
+        )
+
+
+def test_multi_scale_no_cycle_total_yield_independent_of_mix_ratio(
+    fast_and_slow_shards,
+) -> None:
+    """The defining property of no_cycle: total yield count does not depend
+    on mix_ratio. Three mix values, identical total. This is the property
+    that makes eval metrics comparable across runs and across mix-ratio
+    settings — a regression to a mix-coupled formula would fail here."""
+    fast, slow = fast_and_slow_shards
+    counts = []
+    for mix in (0.2, 0.5, 0.8):
+        ds = MultiScaleNidDataset(
+            fast, slow, mix_ratio=mix, shuffle_buffer=0,
+            label_mode="raw15", seed=42,
+            epoch_end_strategy="no_cycle",
+        )
+        counts.append(len(list(ds)))
+    assert counts[0] == counts[1] == counts[2], (
+        f"no_cycle total drifted with mix_ratio: {counts} for mix=(0.2, 0.5, 0.8)"
+    )
+
+
+def test_multi_scale_no_cycle_deterministic_under_seed(
+    fast_and_slow_shards,
+) -> None:
+    """Same seed → same scale_id sequence under no_cycle. The state-machine
+    flags don't introduce non-determinism."""
+    fast, slow = fast_and_slow_shards
+    a = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=123,
+        epoch_end_strategy="no_cycle",
+    )
+    b = MultiScaleNidDataset(
+        fast, slow, mix_ratio=0.5, shuffle_buffer=0,
+        label_mode="raw15", seed=123,
+        epoch_end_strategy="no_cycle",
+    )
+    seq_a = [int(s["scale_id"].item()) for s in a]
+    seq_b = [int(s["scale_id"].item()) for s in b]
+    assert seq_a == seq_b
