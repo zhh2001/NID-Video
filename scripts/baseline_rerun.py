@@ -43,6 +43,8 @@ from torchmetrics.classification import (
     MulticlassRecall,
 )
 
+from torch import nn
+
 from nid_video.data.dataset import build_multi_scale_dataloader, num_classes as label_num_classes
 from nid_video.models.videomae_nid import VideoMAESmallForNID
 from nid_video.utils import logger, setup_logger
@@ -77,6 +79,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--device", default="cuda")
     p.add_argument("--pretrained", default=None,
                    help="HF model id; default None — backbone weights come from --resume.")
+    p.add_argument("--model",
+                   choices=["videomae_small", "timesformer_small", "c3d_small",
+                            "i3d", "r2plus1d_18", "convlstm"],
+                   default="videomae_small",
+                   help="Backbone selector — must match what the source training "
+                        "run used. Default keeps the M3-onward main method; M5.5 "
+                        "baselines override per-row.")
     p.add_argument("--output-dir", type=Path, required=True,
                    help="Directory to write metrics JSON / CSV / README into.")
     p.add_argument("--source-train-macro-f1", type=float, default=None,
@@ -94,20 +103,38 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _build_model(args: argparse.Namespace, n_classes: int) -> VideoMAESmallForNID:
+def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
+    """Construct the backbone the source run trained. Dispatch mirrors
+    scripts/train.py's ``_build_model`` so eval-time loading reads the
+    same architectural keys the trainer wrote.
+    """
     cfg = load_config(args.config)
-    model = VideoMAESmallForNID(
-        num_classes=n_classes,
-        pretrained=args.pretrained,
-        in_channels=cfg.data.num_channels,
-        tube_patch=tuple(cfg.model.tube_patch),
-        spatial_grid=(cfg.data.num_ip_buckets, cfg.data.num_port_buckets),
-        gradient_checkpointing=False,
+    name = args.model
+    if name == "videomae_small":
+        return VideoMAESmallForNID(
+            num_classes=n_classes,
+            pretrained=args.pretrained,
+            in_channels=cfg.data.num_channels,
+            tube_patch=tuple(cfg.model.tube_patch),
+            spatial_grid=(cfg.data.num_ip_buckets, cfg.data.num_port_buckets),
+            gradient_checkpointing=False,
+        )
+    if name == "timesformer_small":
+        from nid_video.models.timesformer_small_nid import TimeSformerSmallForNID
+        return TimeSformerSmallForNID(
+            num_classes=n_classes,
+            in_channels=cfg.data.num_channels,
+            target_image_size=64,
+            num_frames=16,
+            gradient_checkpointing=False,
+        )
+    raise SystemExit(
+        f"--model {name!r} not yet implemented (Round 2+ adds c3d_small / "
+        f"i3d / r2plus1d_18 / convlstm)"
     )
-    return model
 
 
-def _load_weights(model: VideoMAESmallForNID, ckpt_path: Path, device: str) -> None:
+def _load_weights(model: nn.Module, ckpt_path: Path, device: str) -> None:
     ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
     if "model" not in ckpt:
         raise RuntimeError(f"{ckpt_path}: not a Trainer-format checkpoint (no 'model' field)")
@@ -121,7 +148,7 @@ def _load_weights(model: VideoMAESmallForNID, ckpt_path: Path, device: str) -> N
 
 
 def _accumulate_predictions(
-    model: VideoMAESmallForNID,
+    model: nn.Module,
     loader,
     device: str,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:

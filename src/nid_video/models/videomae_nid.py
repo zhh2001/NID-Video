@@ -35,6 +35,7 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import VideoMAEConfig, VideoMAEModel
 
+from nid_video.models._adapters import adapt_conv3d_to_6ch
 from nid_video.utils import logger
 
 ScaleInit = Literal["zero", "trunc_normal"]
@@ -193,37 +194,20 @@ class VideoMAESmallForNID(nn.Module):
 
         pe = self.backbone.embeddings.patch_embeddings
         old_proj = pe.projection
-        old_w = old_proj.weight.data            # (out_ch, 3, T_orig, H_orig, W_orig)
-        old_b = old_proj.bias.data              # (out_ch,)
-        out_ch, _, T_orig, H_orig, W_orig = old_w.shape
-
-        # Trilinear interpolate. F.interpolate(mode='trilinear') needs (N, C, D, H, W)
-        # and only knows how to spatially-volumetrically resample. We treat each
-        # (out_ch, in_ch_subset) pair as an independent tube of values and resample
-        # the (D=T, H, W) of each tube. Reshape to (out_ch * 3, 1, T, H, W).
-        flat = old_w.reshape(out_ch * 3, 1, T_orig, H_orig, W_orig)
-        downed = F.interpolate(
-            flat, size=(T_p, H_p, W_p),
-            mode="trilinear", align_corners=False,
-        )                                       # (out_ch * 3, 1, T_p, H_p, W_p)
-        down_w = downed.reshape(out_ch, 3, T_p, H_p, W_p)
-
+        out_ch = old_proj.weight.shape[0]
         n_extra = self.in_channels - 3
-        if n_extra > 0:
-            fresh = torch.empty(out_ch, n_extra, T_p, H_p, W_p)
-            nn.init.kaiming_normal_(fresh, nonlinearity="relu")
-            new_w = torch.cat([down_w, fresh], dim=1)
-        else:
-            new_w = down_w
 
-        new_proj = nn.Conv3d(
-            in_channels=self.in_channels,
-            out_channels=out_ch,
-            kernel_size=(T_p, H_p, W_p),
-            stride=(T_p, H_p, W_p),
+        # Delegate the trilinear-downsample + Kaiming-extra pattern to the
+        # shared adapter so I3D / R(2+1)D / C3D can use the same code path
+        # in M5.5. Behaviour is byte-identical to the previous inline
+        # implementation (verified by re-running the M3-001 norm-ratio
+        # test that lives in tests/test_videomae_nid.py).
+        new_proj = adapt_conv3d_to_6ch(
+            old_proj,
+            target_kernel=(T_p, H_p, W_p),
+            target_stride=(T_p, H_p, W_p),
+            n_extra=n_extra,
         )
-        new_proj.weight.data.copy_(new_w)
-        new_proj.bias.data.copy_(old_b)
 
         # Replace the projection module + sync the patch_embeddings module's metadata.
         pe.projection = new_proj
@@ -242,14 +226,15 @@ class VideoMAESmallForNID(nn.Module):
         cfg.tubelet_size = T_p
 
         # Diagnostics — the central validation that the pretraining survived
-        # rather than being silently overwritten by fresh init.
-        ch3_norm = down_w.norm().item()
-        ext_norm = float(fresh.norm().item()) if n_extra > 0 else 0.0
+        # rather than being silently overwritten by fresh init. Slice the new
+        # adapted weights to extract per-channel-group norms for the log.
+        ch3_norm = new_proj.weight.data[:, :3].norm().item()
+        ext_norm = new_proj.weight.data[:, 3:].norm().item() if n_extra > 0 else 0.0
         logger.info(
             f"patch_embed adapted: ch[0:3] downsampled {16}→{H_p} "
-            f"shape={tuple(down_w.shape)} norm={ch3_norm:.2f}; "
+            f"shape={tuple(new_proj.weight.data[:, :3].shape)} norm={ch3_norm:.2f}; "
             f"ch[3:{self.in_channels}] kaiming-init shape="
-            f"{(out_ch, n_extra, T_p, H_p, W_p) if n_extra > 0 else 'n/a'} "
+            f"{tuple(new_proj.weight.data[:, 3:].shape) if n_extra > 0 else 'n/a'} "
             f"norm={ext_norm:.2f}"
         )
 

@@ -159,7 +159,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--debug", action="store_true",
                    help="FP32 + vanilla AdamW + no grad checkpointing (sanity run)")
     p.add_argument("--pretrained", default="MCG-NJU/videomae-small-finetuned-kinetics",
-                   help="HF model id, or '' / 'none' to skip pretraining")
+                   help="HF model id, or '' / 'none' to skip pretraining. "
+                        "Default targets VideoMAE-Small; baselines override "
+                        "via --model (which selects the right default ckpt).")
+    p.add_argument("--model",
+                   choices=["videomae_small", "timesformer_small", "c3d_small",
+                            "i3d", "r2plus1d_18", "convlstm"],
+                   default="videomae_small",
+                   help="Backbone selector (M5.5). Default keeps the M3-onward "
+                        "main method. Baselines build the same forward "
+                        "signature (x, scale_id) → logits/features but ignore "
+                        "scale_id when scale-agnostic.")
     p.add_argument("--resume", type=Path, default=None,
                    help="Resume from a .pt checkpoint (or load weights when --eval-only).")
     p.add_argument("--export-safetensors", type=Path, default=None,
@@ -192,6 +202,44 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--eval-only requires --resume <path>")
     if not 0.0 <= args.mix_ratio <= 1.0:
         raise SystemExit(f"--mix-ratio must be in [0, 1], got {args.mix_ratio}")
+
+
+def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None):
+    """Dispatch on ``args.model`` to construct the chosen backbone with
+    the project's standard input contract (T=16, C=6, H=32, W=64). The
+    main method is ``videomae_small`` (M3 onward); baselines are added
+    in M5.5 Round 1+.
+
+    All baselines expose ``forward(x, *, scale_id) → {logits, features}``
+    even when they're scale-agnostic — the trainer's call site treats
+    every model uniformly.
+    """
+    name = args.model
+    if name == "videomae_small":
+        return VideoMAESmallForNID(
+            num_classes=n_classes,
+            pretrained=pretrained,
+            in_channels=cfg.data.num_channels,
+            tube_patch=tuple(cfg.model.tube_patch),
+            spatial_grid=(cfg.data.num_ip_buckets, cfg.data.num_port_buckets),
+            gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
+    if name == "timesformer_small":
+        from nid_video.models.timesformer_small_nid import TimeSformerSmallForNID
+        # TimeSformer-Small runs random-init from scratch (no public
+        # 22M Kinetics ckpt at this scale). Any --pretrained value the
+        # user passes is silently ignored — the constructor takes none.
+        return TimeSformerSmallForNID(
+            num_classes=n_classes,
+            in_channels=cfg.data.num_channels,
+            target_image_size=64,
+            num_frames=16,
+            gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
+    raise SystemExit(
+        f"--model {name!r} not yet implemented in M5.5 (Round 2+ adds "
+        f"c3d_small / i3d / r2plus1d_18 / convlstm)"
+    )
 
 
 def _override_for_debug(training_cfg):
@@ -539,14 +587,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     pretrained = None if args.pretrained.lower() in ("", "none") else args.pretrained
     n_classes = label_num_classes(args.label_mode)
 
-    model = VideoMAESmallForNID(
-        num_classes=n_classes,
-        pretrained=pretrained,
-        in_channels=cfg.data.num_channels,
-        tube_patch=tuple(cfg.model.tube_patch),
-        spatial_grid=(cfg.data.num_ip_buckets, cfg.data.num_port_buckets),
-        gradient_checkpointing=training.gradient_checkpointing,
-    )
+    model = _build_model(args, cfg, training, n_classes, pretrained)
 
     train_loader, val_loader = _build_loaders(args, training, for_eval_only=args.eval_only)
 

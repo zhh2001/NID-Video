@@ -30,6 +30,7 @@ predictions for the full val split, and partitions on each sample's
 | M5.2 | 10 | 48,530 | 0.5143 | **0.4677** | −0.0466 | 0.4402 | 0.4077 | CE |
 | M5.4 P1 | 10 | 48,530 | 0.4584 ⁂ | **0.4584** ⁂ | 0.0000 ⁂ | 0.5060 ⁂ | 0.5060 | focal γ=2 |
 | M5.4 P2 | 10 | 48,530 | 0.4756 ⁂ | **0.4756** ⁂ | 0.0000 ⁂ | 0.4968 ⁂ | 0.4968 | focal γ=2 + inv-sqrt α + head LR ×5 |
+| M5.5 R1 (TimeSformer-Small) | 10 | 48,530 | 0.4836 ⁂ | **0.4836** ⁂ | 0.0000 ⁂ | 0.7151 ⁂ | 0.7151 | focal γ=2 + inv-sqrt α + head LR ×5 (baseline; 30.8M random-init) |
 
 † M4.8's original training task output was retained only in
 in-conversation records; the value 0.7411 is the figure cited there.
@@ -342,6 +343,126 @@ configuration, and where applicable the same loss/reweight/head_lr
 combination. The 0.4525 fast-only number is the apples-to-apples
 reference for single-resolution baseline comparisons.
 
+## M5.5 baselines: cross-architecture comparison
+
+A five-baseline suite established the architectural axis of the
+representation × backbone alignment question that motivates this
+project: holding the input tensor (T=16, C=6, H=32, W=64), splits, eval
+policy, optimisation stack, and loss/reweight/head_lr configuration
+constant, what does the choice of video backbone alone buy or cost vs
+the M5.4 P2 main method?
+
+The five planned baselines are TimeSformer-Small, C3D-Small, I3D,
+R(2+1)D-18, and ConvLSTM. Round 1 (this commit) delivers
+TimeSformer-Small; rounds 2-3 add the remaining four under the same
+fairness contract.
+
+### Fairness contract (all rows)
+
+- Input: identical (T=16, C=6, H=32, W=64) NID tensor; same
+  splits.parquet; multi-scale 50/50 fast/slow mix.
+- Optimiser: 8-bit AdamW, batch=32, grad_accumulation=1, fp16 AMP.
+- Loss: focal γ=2 + inverse-sqrt class reweighting + head LR ×5 on
+  the classification head's parameter group (matches M5.4 P2).
+- Schedule: 10 epochs, ~48,510 grad steps under round_robin
+  epoch terminator; per-epoch eval under no_cycle so the in-training
+  metric is bit-identical to the noise-free re-evaluation (Δ ≈ 0).
+
+### Pretrained-checkpoint asymmetry across the suite
+
+| Baseline | Params | Pretrained source | Note |
+|---|---:|---|---|
+| VideoMAE-Small (main, M4.8/M5.x) | 22M | Kinetics-400 | Adapted 3→6 channels via `adapt_conv3d_to_6ch`. |
+| TimeSformer-Small | 30.8M | none (random init) | Divided space-time at hidden=384; no public 22M K400 checkpoint at this scale. |
+| C3D-Small | TBD | none (random init) | Round 2. |
+| I3D | TBD | Kinetics-400 | Round 2 — adapter via `adapt_conv3d_to_6ch`. |
+| R(2+1)D-18 | TBD | Kinetics-400 | Round 2 — adapter via `adapt_conv3d_to_6ch`. |
+| ConvLSTM | TBD | none (random init) | Round 3. |
+
+Among the five baselines, R(2+1)D-18 and I3D inherit Kinetics weights;
+TimeSformer-Small, C3D-Small, and ConvLSTM run from scratch. This
+asymmetry reflects the open-source video-backbone ecosystem at this
+parameter scale, not a project choice. The R(2+1)D-18 and I3D rows
+serve as the upper bound for "Kinetics-pretrained video backbone on
+this task" and address whether the main method's advantage stems from
+pretraining or from representation × backbone alignment specifically.
+
+### M5.5 Round 1: TimeSformer-Small (random init from scratch)
+
+10-epoch training of `TimeSformerSmallForNID` (HF `TimesformerConfig`
+with hidden=384, num_hidden_layers=12, num_attention_heads=6,
+intermediate_size=1536, attention_type=`divided_space_time`,
+patch_size=16, image_size=64, num_channels=6 directly with no 3→6
+adapter — random Kaiming init throughout). The H dim is zero-padded
+from 32 → 64 inside `forward` to satisfy TimeSformer's square-frame
+assumption; no other input transformation. `scale_id` is accepted in
+the forward signature but ignored — the model is scale-agnostic by
+design and consumes the multi-scale dataloader's mixed batches without
+conditioning on which stream a sample came from.
+
+Run dir ``outputs/run_20260502_232207``; best epoch = 9 (final);
+``best.pt`` at ``ckpt/best.pt``. Wall time 15,989 s ≈ 4.4 h. Peak GPU
+1004 MB (with gradient checkpointing on; without checkpointing the
+30.8M model OOMs at batch=32 on the 8 GB target box).
+
+Noise-free numbers (verbatim from
+``outputs/run_20260502_232207/m5_5_timesformer_small_eval/eval_metrics.json``):
+
+  combined macro_f1   : 0.4836
+  combined accuracy   : 0.9367
+  combined auroc      : 0.7890
+  fast-only macro_f1  : 0.4547
+  slow-only macro_f1  : 0.6254
+  Bot per-class AUROC : 0.7151
+  val_sample_count    : 18,156   (fast 16,463 + slow 1,693)
+
+Head-to-head with the main method at the identical 10-epoch budget:
+
+  M5.4 P2 (main, K400-pretrained 22M)   combined : 0.4756  fast : 0.4525  slow : 0.6069  Bot AUROC : 0.4968
+  M5.5 R1 TimeSformer-Small (random 31M) combined : 0.4836  fast : 0.4547  slow : 0.6254  Bot AUROC : 0.7151
+
+  Δ combined  : +0.0080
+  Δ fast-only : +0.0022
+  Δ slow-only : +0.0185
+  Δ Bot AUROC : +0.2183
+
+TimeSformer-Small (random init) lifts combined macro_f1 by +0.008 over
+the K400-pretrained main method, with the gain concentrated in the
+slow stream (+0.019 vs +0.002 fast) and a substantial +0.218 lift in
+Bot per-class AUROC. This is informative in two directions:
+
+1. Divided space-time attention is a competitive representation for
+   the (T=16, 32×64) NID tensor at this parameter scale, even without
+   pretraining — meaning the Kinetics-400 prior does not, on its own,
+   account for the main method's score.
+2. The Bot rare-class signal that M5.4 P1/P2 actively chased (focal +
+   inverse-sqrt) survives much better in TimeSformer-Small. The 0.7151
+   value sits between M4.8's 0.7247 (vanilla CE, 1 epoch — under-fit
+   so Bot signal is preserved by accident) and M5.4 P2's 0.4968 (10
+   epochs, 22M VideoMAE collapsed Bot despite the loss intervention).
+   This suggests the rare-class collapse seen in M5.2/M5.4 is at
+   least partly architecture-dependent rather than a pure
+   data-imbalance phenomenon — the focal+α intervention works
+   noticeably better when the backbone does not commit to the
+   majority-class boundary as aggressively.
+
+These are Round 1 readings on a five-row table; the conclusion above
+is provisional until rounds 2-3 fill in I3D / R(2+1)D-18 / C3D-Small /
+ConvLSTM and the Kinetics-pretrained vs random columns are populated
+across the full suite.
+
+### M5.5 Round 1 deliverable
+
+  baseline       : TimeSformer-Small (random init, 30.8M params)
+  configuration  : focal gamma=2 + inverse_sqrt class reweighting + head LR ×5
+  combined macro_f1 (noise-free, no_cycle eval) : 0.4836
+  fast-only macro_f1 : 0.4547
+  slow-only macro_f1 : 0.6254
+  budget         : 10 epochs, 48,530 grad steps, batch=32 / accum=1
+  splits         : data/processed/cicids2017_dt100ms_v2/splits.parquet
+  ckpt           : outputs/run_20260502_232207/ckpt/best.pt
+  artefact       : outputs/run_20260502_232207/m5_5_timesformer_small_eval/
+
 ## Reproduction
 
 The four artefact bundles are stored alongside their source training
@@ -352,6 +473,7 @@ runs (each ``outputs/run_<ts>/`` directory is gitignored):
 - ``outputs/run_20260501_162117/m5_3_rerun/``
 - ``outputs/run_20260502_134735/m5_4_eval/``
 - ``outputs/run_20260502_184512/m5_4_phase2_eval/``
+- ``outputs/run_20260502_232207/m5_5_timesformer_small_eval/``
 
 Each bundle contains ``eval_metrics.json`` (full payload), a
 ``confusion_matrix.json``, a ``per_class_table.csv`` for direct
