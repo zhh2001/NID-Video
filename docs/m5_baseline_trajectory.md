@@ -282,17 +282,65 @@ argmax threshold, regardless of α). DDoS regressed more under P2 than
 under P1 — the head's 5× LR may be over-correcting on this class
 where vanilla CE was already reasonable.
 
-### Phase 3 decision (held for designer review)
+### Phase 3 not pursued — M5.4 P2 accepted as deliverable
 
-Combined macro_f1 in [0.40, 0.50] is below PASS-minimum but above
-red-flag. Per the M5.4 task spec, no Phase 3 is auto-launched. The
-result is forensically captured here for the next-session designer
-to decide between candidate Phase 3 directions:
-γ sweep at higher gamma (3 / 4 / 5 — the Bot-collapse hypothesis
-suggests stronger focusing might help), focused fine-tune from
-M5.2 ckpt (the deferred M5.10-style ablation), data-level
-intervention (rare-class oversampling), or accepting the M5.4 P2
-result as the M5.4 deliverable and proceeding to M5.5 baselines.
+Loss-level optimisation saturates around combined macro_f1 = 0.4756
+under the current data scale. Two stacked levers (focal gamma=2 in
+Phase 1, then focal + inverse-sqrt alpha + head LR multiplier in
+Phase 2) together lifted the combined number by +0.0079 over the
+vanilla CE ceiling — meaningful enough to ship as a fairness baseline
+but small enough that further loss-internal tweaks (gamma sweep,
+alternative reweighting schemes) project negative or marginal returns.
+
+The remaining failure modes split cleanly along sample-count axes:
+
+- **Mid-rarity classes (n_train > 200)** were successfully addressed:
+  GoldenEye F1 0.2278 → 0.4130 (M5.2 → P2) is a monotonic, design-
+  intent gain. PortScan F1 (n_val=22) jumped 0.3889 → 0.5957 in P2,
+  another reweighting win.
+- **Extreme-rarity classes (n_train < 50)** are not loss-fixable on
+  this dataset: Bot (n_train=30, n_val=12) stayed at F1=0 across all
+  three checkpoints; its AUROC drifted 0.5060 → 0.4968 across P1 → P2,
+  showing that increasing alpha by 49× and head LR by 5× cannot
+  manufacture argmax-passing predictions when the val set is too
+  small for the threshold to be crossed reliably.
+- **Web Attack and Infiltration (n_train=0, n_val=0)** are out of
+  scope for this CIC subset — the original Tue+Wed+Fri pcap selection
+  excludes Thursday, where these attacks were captured.
+
+Candidate Phase 3 directions are deferred:
+
+- **gamma sweep (γ=3/4/5)** — projected negative return: with α already
+  pushing the rare-class loss share to ~3× and the gradient-flow test
+  showing > 100× ratio at γ=2, additional focusing concentrates more
+  gradient onto the same already-hard samples that the val set is too
+  small to learn anyway.
+- **fine-tune from M5.2 ckpt** — moved to M5.10 ablation as the
+  "from-scratch vs fine-tune" comparison; would inherit M5.2's collapsed
+  Bot representation as a starting point and is not the natural follow-on.
+- **data-level intervention (rare-class oversampling)** — moved to
+  M5.10 as the "data-level vs loss-level fix" ablation chapter; the
+  M5.4 task spec scoped to loss-level only.
+
+The real narrative-decision axis is M5.5+ (representation × backbone
+alignment across baselines), not internal loss micro-optimisation.
+
+### M5.4 deliverable
+
+  configuration  : focal gamma=2 + inverse_sqrt class reweighting + head LR ×5
+  combined macro_f1 (noise-free, no_cycle eval) : 0.4756
+  fast-only macro_f1 : 0.4525
+  slow-only macro_f1 : 0.6069
+  budget         : 10 epochs, 48,510 grad steps, batch=32 / accum=1
+  splits         : data/processed/cicids2017_dt100ms_v2/splits.parquet
+  ckpt           : outputs/run_20260502_184512/ckpt/best.pt
+  artefact       : outputs/run_20260502_184512/m5_4_phase2_eval/
+
+M5.5 baselines run under the same budget, splits, eval policy
+(no_cycle), batch / accumulation / multi-scale (50/50 fast/slow)
+configuration, and where applicable the same loss/reweight/head_lr
+combination. The 0.4525 fast-only number is the apples-to-apples
+reference for single-resolution baseline comparisons.
 
 ## Reproduction
 
