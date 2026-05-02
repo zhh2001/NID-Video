@@ -130,6 +130,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         "Otherwise Trainer falls back to a heuristic with WARNING.")
     p.add_argument("--track-best", default="macro_f1",
                    help="Metric to maximize for best.pt selection. Default 'macro_f1'.")
+    p.add_argument("--loss-fn", choices=["ce", "focal"], default=None,
+                   help="Override training.loss_fn from the config. 'ce' is "
+                        "vanilla cross-entropy (default). 'focal' uses "
+                        "FocalLoss with --focal-gamma. M5.4 invocation: "
+                        "--loss-fn focal --focal-gamma 2.0")
+    p.add_argument("--focal-gamma", type=float, default=None,
+                   help="Override training.focal_gamma. Effective only when "
+                        "--loss-fn is (or resolves to) 'focal'. Default 2.0.")
 
     # ----- existing -----
     p.add_argument("--label-mode", choices=["raw15", "collapsed13"], default="collapsed13")
@@ -440,6 +448,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.debug:
         training = _override_for_debug(training)
         logger.warning("--debug: FP32 + AdamW + no grad checkpointing")
+    if args.loss_fn is not None:
+        training = training.model_copy(update={"loss_fn": args.loss_fn})
+    if args.focal_gamma is not None:
+        training = training.model_copy(update={"focal_gamma": args.focal_gamma})
 
     pretrained = None if args.pretrained.lower() in ("", "none") else args.pretrained
     n_classes = label_num_classes(args.label_mode)

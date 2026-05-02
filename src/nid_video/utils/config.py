@@ -63,6 +63,10 @@ class TrainingConfig(BaseModel):
     precision: Literal["fp16", "bf16", "fp32"] = "fp16"
     gradient_checkpointing: bool = True
     num_workers: int = Field(default=0, ge=0)
+    # Loss function (M5.4). ``"ce"`` keeps the historical default; ``"focal"``
+    # selects multi-class focal loss with focusing parameter ``focal_gamma``.
+    loss_fn: Literal["ce", "focal"] = "ce"
+    focal_gamma: float = Field(default=2.0, gt=0)
 
 
 class LoggingConfig(BaseModel):

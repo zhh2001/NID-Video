@@ -23,11 +23,12 @@ predictions for the full val split, and partitions on each sample's
 
 ## Trajectory table (collapsed-13, val split)
 
-| Run | Epoch | grad_steps | reported macro_f1 (round_robin) | noise-free macro_f1 (no_cycle) | Δ | reported Bot AUROC | noise-free Bot AUROC |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| M4.8 | 1 | 4,853 | 0.4474 | **0.3324** | −0.1150 | 0.7411 † | 0.7247 |
-| M5.1 | 3 | 14,559 | 0.5113 | **0.4230** | −0.0883 | n/a ‡ | 0.4237 |
-| M5.2 | 10 | 48,530 | 0.5143 | **0.4677** | −0.0466 | 0.4402 | 0.4077 |
+| Run | Epoch | grad_steps | reported macro_f1 | noise-free macro_f1 | Δ | reported Bot AUROC | noise-free Bot AUROC | loss |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| M4.8 | 1 | 4,853 | 0.4474 | **0.3324** | −0.1150 | 0.7411 † | 0.7247 | CE |
+| M5.1 | 3 | 14,559 | 0.5113 | **0.4230** | −0.0883 | n/a ‡ | 0.4237 | CE |
+| M5.2 | 10 | 48,530 | 0.5143 | **0.4677** | −0.0466 | 0.4402 | 0.4077 | CE |
+| M5.4 P1 | 10 | 48,530 | 0.4584 ⁂ | **0.4584** ⁂ | 0.0000 ⁂ | 0.5060 ⁂ | 0.5060 | focal γ=2 |
 
 † M4.8's original training task output was retained only in
 in-conversation records; the value 0.7411 is the figure cited there.
@@ -36,6 +37,14 @@ in-conversation records; the value 0.7411 is the figure cited there.
 before this trajectory was assembled. The noise-free re-eval (0.4237)
 is the recoverable number; the reported value would require a fresh
 ``round_robin`` re-eval of the same checkpoint.
+
+⁂ M5.4 was trained with ``--eval-strategy no_cycle`` from epoch 0 (the
+M5.3 default for val loaders), so its in-training and re-evaluation
+numbers are bit-identical — Δ = 0.0000 by construction. There is no
+``round_robin`` reported figure to compare against. The Bot AUROC for
+M5.4 P1 is the noise-free value reproduced once (0.5060) — the column
+duplication is intentional, to keep the table shape consistent across
+rows.
 
 ### val_sample_count_total bit-identity
 
@@ -126,6 +135,70 @@ necessary intervention rather than an optimisation, and the noise-free
 macro_f1 = 0.4677 (combined) / 0.4510 (fast-only) is the reference
 ceiling that M5.4 must clear to justify the change.
 
+## M5.4 Phase 1: focal loss γ=2 from scratch — does NOT clear the ceiling
+
+10-epoch training with ``--loss-fn focal --focal-gamma 2.0``, no
+``--resume`` (pretrained Kinetics backbone + fresh classification
+head), all other hyperparameters identical to M5.2. Run dir
+``outputs/run_20260502_134735``; best epoch = 9 (final),
+``best.pt`` at ``ckpt/best.pt``.
+
+Noise-free numbers (verbatim from
+``outputs/run_20260502_134735/m5_4_eval/eval_metrics.json``):
+
+  combined macro_f1   : 0.4584
+  combined accuracy   : 0.9598
+  combined auroc      : 0.7609
+  fast-only macro_f1  : 0.4262
+  slow-only macro_f1  : 0.6035
+  Bot per-class AUROC : 0.5060
+  val_sample_count    : 18,156   (fast 16,463 + slow 1,693)
+
+Comparison to vanilla CE M5.2 noise-free at the same training budget:
+
+  M5.2 combined  : 0.4677
+  M5.4 combined  : 0.4584   (Δ = -0.0092, slight regression)
+  M5.2 fast-only : 0.4510
+  M5.4 fast-only : 0.4262   (Δ = -0.0248)
+  M5.2 slow-only : 0.5476
+  M5.4 slow-only : 0.6035   (Δ = +0.0559)
+
+Focal γ=2 trades fast-stream macro F1 down for slow-stream macro F1 up,
+without lifting the combined number above the vanilla CE ceiling. The
+trade is the wrong direction for the project's primary goal: the
+fast-stream number is the apples-to-apples baseline against
+single-resolution models in M5.5+.
+
+Sentinel checks (set in the M5.4 task spec to define a true PASS):
+
+| Check | Threshold | Measured | Status |
+|---|---:|---:|:--:|
+| Bot F1 | > 0 | 0.0000 | FAIL |
+| Bot AUROC | > 0.6 | 0.5060 | FAIL |
+| DoS-GoldenEye F1 | ≥ 0.40 | 0.2892 | FAIL |
+| FTP-Patator F1 | ≥ 0.20 | 0.0488 | FAIL |
+
+Four of four sentinels fail. Combined macro_f1 (0.4584) lands in the
+``< 0.52`` band, which the task spec earmarks for Phase 2 trigger
+(focal + class-frequency reweighting). The Phase 2 decision is
+deferred to the user — this commit captures the focal-loss training
+infrastructure and the Phase 1 results regardless.
+
+### Bot AUROC trajectory: focal slowed but did not prevent collapse
+
+Mid-training peek at M5.4 epoch 2 had Bot AUROC = 0.6773 (above
+random, comparable to M4.8's 0.7247 at the same training depth). By
+epoch 9 the value had decayed to 0.5060 — still above M5.1's 0.4237
+and M5.2's 0.4077, but well below M4.8's 0.7247. So the focal γ=2
+intervention **slowed** the rare-class collapse without **preventing**
+it: the model still drifts toward suppressing the Bot logit late in
+training, just on a longer timescale than vanilla CE.
+
+For Phase 2 / Phase 3 design, the obvious knobs are γ > 2 (sharper
+focus on hard samples) and per-class alpha (which the FocalLoss
+implementation already accepts as a buffer; the Phase 2 hook is
+therefore zero-code-change).
+
 ## Reproduction
 
 The four artefact bundles are stored alongside their source training
@@ -134,6 +207,7 @@ runs (each ``outputs/run_<ts>/`` directory is gitignored):
 - ``outputs/run_20260430_223105/m4_8_rerun/``
 - ``outputs/run_20260501_143946/m5_1_rerun/``
 - ``outputs/run_20260501_162117/m5_3_rerun/``
+- ``outputs/run_20260502_134735/m5_4_eval/``
 
 Each bundle contains ``eval_metrics.json`` (full payload), a
 ``confusion_matrix.json``, a ``per_class_table.csv`` for direct

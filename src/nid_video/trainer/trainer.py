@@ -31,6 +31,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from nid_video.trainer.evaluator import Evaluator
+from nid_video.trainer.loss import build_criterion
 from nid_video.trainer.scheduler import make_cosine_scheduler
 from nid_video.utils import logger
 from nid_video.utils.config import TrainingConfig
@@ -101,7 +102,7 @@ class Trainer:
         self.ckpt_dir = self.run_dir / "ckpt"
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-        self.criterion = criterion if criterion is not None else nn.CrossEntropyLoss()
+        self.criterion = criterion if criterion is not None else build_criterion(config)
         self.optimizer = _build_optimizer(self.model, config, optimizer_class)
 
         # M4 task 4.3: cosine LR with linear warmup. ``total_steps`` is the
@@ -178,7 +179,8 @@ class Trainer:
             f"optimizer={config.optimizer}, lr={config.lr}, wd={config.weight_decay}, "
             f"batch_size={config.batch_size}, grad_accumulation={self.grad_accum}, "
             f"warmup_steps={self.warmup_steps}, total_steps={self.total_steps}, "
-            f"min_lr_ratio={self.min_lr_ratio}, run_dir={self.run_dir}"
+            f"min_lr_ratio={self.min_lr_ratio}, criterion={type(self.criterion).__name__}, "
+            f"run_dir={self.run_dir}"
         )
 
     # ------------------------------------------------------------------
