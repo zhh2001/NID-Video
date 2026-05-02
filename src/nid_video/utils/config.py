@@ -67,6 +67,17 @@ class TrainingConfig(BaseModel):
     # selects multi-class focal loss with focusing parameter ``focal_gamma``.
     loss_fn: Literal["ce", "focal"] = "ce"
     focal_gamma: float = Field(default=2.0, gt=0)
+    # Class reweighting (M5.4 Phase 2). ``"none"`` keeps loss class-uniform;
+    # ``"inverse_sqrt"`` multiplies each sample's loss by alpha[target] where
+    # alpha = 1/sqrt(n_train), normalised to mean=1 over present classes
+    # (n=0 classes get alpha=0). The alpha tensor is computed by the training
+    # entry point and injected via the criterion.
+    reweighting: Literal["none", "inverse_sqrt"] = "none"
+    # Multiplier applied to the classification head's effective LR relative to
+    # the backbone's. The head (classifier + scale_token + scale_embedding) is
+    # fresh-init at construction and benefits from a higher LR than the
+    # Kinetics-pretrained backbone. Default 1.0 = single-group behaviour.
+    head_lr_multiplier: float = Field(default=1.0, gt=0)
 
 
 class LoggingConfig(BaseModel):

@@ -138,6 +138,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--focal-gamma", type=float, default=None,
                    help="Override training.focal_gamma. Effective only when "
                         "--loss-fn is (or resolves to) 'focal'. Default 2.0.")
+    p.add_argument("--reweighting", choices=["none", "inverse_sqrt"], default=None,
+                   help="Override training.reweighting (M5.4 Phase 2). "
+                        "'inverse_sqrt' computes alpha = 1/sqrt(n_train), "
+                        "normalised to mean=1 over present classes, and "
+                        "injects it into FocalLoss. 'none' (default) keeps "
+                        "loss class-uniform.")
+    p.add_argument("--head-lr-multiplier", type=float, default=None,
+                   help="Override training.head_lr_multiplier (M5.4 Phase 2). "
+                        "Sets the classification head (classifier + "
+                        "scale_token + scale_embedding) LR to the given "
+                        "multiple of the backbone LR. Default 1.0.")
 
     # ----- existing -----
     p.add_argument("--label-mode", choices=["raw15", "collapsed13"], default="collapsed13")
@@ -238,6 +249,74 @@ def _total_steps_from_train_n(
         1, math.ceil(anchor_n / max(1, batch_size * grad_accumulation))
     )
     return steps_per_epoch * num_epochs
+
+
+def _scan_train_class_counts(
+    splits: dict, fast_pattern: str, n_classes: int, label_mode: str,
+) -> list[int]:
+    """One-pass scan of the fast (100ms) train shards to count per-class
+    samples in the train split. Used by ``--reweighting inverse_sqrt`` to
+    compute focal-loss alpha. Returns a length-``n_classes`` list of ints.
+
+    The scan is on the fast shards because splits.parquet was built on
+    them (M5.1 contract); slow-stream class counts are deterministic
+    multiples (~1/10) of the fast counts and don't add information for
+    inverse-sqrt frequency weighting.
+    """
+    from nid_video.data.labeling import collapse_to_13
+    from nid_video.data.split import collect_window_keys_from_shards
+
+    counts = [0] * n_classes
+    for kvl in collect_window_keys_from_shards(fast_pattern):
+        if splits.get(kvl.key) != "train":
+            continue
+        label_id = kvl.label_id
+        if label_mode == "collapsed13":
+            label_id = collapse_to_13(label_id)
+        if 0 <= label_id < n_classes:
+            counts[label_id] += 1
+    return counts
+
+
+def _build_reweighted_criterion(args: argparse.Namespace, training_cfg, n_classes: int):
+    """Compute inverse-sqrt alpha from the train split and build the
+    matching FocalLoss. Returns a fully-constructed nn.Module ready to
+    inject into ``Trainer(criterion=...)``.
+    """
+    import torch as _torch
+
+    from nid_video.data.split import load_splits
+    from nid_video.trainer.loss import build_criterion, compute_inverse_sqrt_alpha
+
+    if args.splits_path is None or not args.splits_path.is_file():
+        raise SystemExit(
+            "--reweighting inverse_sqrt requires --splits-path to a valid "
+            "splits.parquet file"
+        )
+    fast_pattern = args.shard_pattern_fast or args.shard_pattern
+    if fast_pattern is None:
+        raise SystemExit(
+            "--reweighting inverse_sqrt requires --shard-pattern-fast "
+            "(multi-scale) or --shard-pattern (single-scale) to scan for "
+            "train class counts"
+        )
+
+    logger.info(
+        f"scanning train shards for class counts: {fast_pattern} "
+        f"(label_mode={args.label_mode}, n_classes={n_classes}) ..."
+    )
+    splits = load_splits(args.splits_path)
+    counts = _scan_train_class_counts(splits, fast_pattern, n_classes, args.label_mode)
+    alpha_cpu = compute_inverse_sqrt_alpha(counts, n_classes)
+    counts_pretty = ", ".join(f"{c}" for c in counts)
+    alpha_pretty = ", ".join(f"{a:.4f}" for a in alpha_cpu.tolist())
+    logger.info(
+        f"train class counts: [{counts_pretty}] (total {sum(counts)})"
+    )
+    logger.info(f"inverse-sqrt alpha (mean=1 over n>0): [{alpha_pretty}]")
+
+    alpha_dev = alpha_cpu.to(args.device) if args.device != "cpu" else alpha_cpu
+    return build_criterion(training_cfg, alpha=alpha_dev)
 
 
 def _count_train_in_slow_shards(slow_pattern: str, splits: dict) -> int:
@@ -452,6 +531,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         training = training.model_copy(update={"loss_fn": args.loss_fn})
     if args.focal_gamma is not None:
         training = training.model_copy(update={"focal_gamma": args.focal_gamma})
+    if args.reweighting is not None:
+        training = training.model_copy(update={"reweighting": args.reweighting})
+    if args.head_lr_multiplier is not None:
+        training = training.model_copy(update={"head_lr_multiplier": args.head_lr_multiplier})
 
     pretrained = None if args.pretrained.lower() in ("", "none") else args.pretrained
     n_classes = label_num_classes(args.label_mode)
@@ -472,11 +555,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     total_steps = _compute_total_steps(args, training)
 
+    # M5.4 Phase 2: when class reweighting is requested, scan the train shards
+    # once for class counts, compute alpha, and inject the resulting criterion
+    # into the Trainer. The Trainer's own build_criterion(config) default does
+    # not have data access by design, so the alpha plumbing lives here.
+    criterion = None
+    if training.reweighting == "inverse_sqrt":
+        criterion = _build_reweighted_criterion(args, training, n_classes)
+
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         config=training,
         device=args.device,
+        criterion=criterion,
         warmup_steps=args.warmup_steps,
         total_steps=total_steps,
         val_loader=val_loader,

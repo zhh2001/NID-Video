@@ -29,6 +29,7 @@ predictions for the full val split, and partitions on each sample's
 | M5.1 | 3 | 14,559 | 0.5113 | **0.4230** | −0.0883 | n/a ‡ | 0.4237 | CE |
 | M5.2 | 10 | 48,530 | 0.5143 | **0.4677** | −0.0466 | 0.4402 | 0.4077 | CE |
 | M5.4 P1 | 10 | 48,530 | 0.4584 ⁂ | **0.4584** ⁂ | 0.0000 ⁂ | 0.5060 ⁂ | 0.5060 | focal γ=2 |
+| M5.4 P2 | 10 | 48,530 | 0.4756 ⁂ | **0.4756** ⁂ | 0.0000 ⁂ | 0.4968 ⁂ | 0.4968 | focal γ=2 + inv-sqrt α + head LR ×5 |
 
 † M4.8's original training task output was retained only in
 in-conversation records; the value 0.7411 is the figure cited there.
@@ -199,6 +200,100 @@ focus on hard samples) and per-class alpha (which the FocalLoss
 implementation already accepts as a buffer; the Phase 2 hook is
 therefore zero-code-change).
 
+## M5.4 Phase 2: focal γ=2 + inverse-sqrt α + head LR ×5 — small gain, sentinels still fail
+
+10-epoch training with focal γ=2 unchanged from Phase 1, plus
+inverse-sqrt class reweighting (alpha = 1/sqrt(n_train), normalised
+to mean=1 over present classes; n=0 classes get α=0) and a separate
+optimizer parameter group for the classification head + scale_token +
+scale_embedding at 5× the backbone learning rate. All other
+hyperparameters identical to Phase 1.
+
+Run dir ``outputs/run_20260502_184512``; best epoch = 9 (final);
+``best.pt`` at ``ckpt/best.pt``.
+
+Noise-free numbers (verbatim from
+``outputs/run_20260502_184512/m5_4_phase2_eval/eval_metrics.json``):
+
+  combined macro_f1   : 0.4756
+  combined accuracy   : 0.9560
+  combined auroc      : 0.7641
+  fast-only macro_f1  : 0.4525
+  slow-only macro_f1  : 0.6069
+  Bot per-class AUROC : 0.4968
+  val_sample_count    : 18,156   (fast 16,463 + slow 1,693)
+
+Three-way comparison at the identical 10-epoch budget:
+
+  M5.2 CE      combined : 0.4677  fast : 0.4510  slow : 0.5476
+  M5.4 P1      combined : 0.4584  fast : 0.4262  slow : 0.6035
+  M5.4 P2      combined : 0.4756  fast : 0.4525  slow : 0.6069
+
+  delta P2 - P1 : +0.0172   (combined)
+  delta P2 - CE : +0.0079   (combined; barely clears the vanilla ceiling)
+  delta P2 - P1 fast : +0.0263 (recovered the fast-stream regression P1 introduced)
+  delta P2 - P1 slow : +0.0034
+  delta P2 - CE fast : +0.0015 (effectively flat against fast-only CE)
+
+P2 modestly clears P1 and the vanilla CE ceiling on the combined
+metric, but the headline number 0.4756 lands in the spec's
+``[0.40, 0.50]`` band — below the 0.50 PASS-minimum threshold and
+well below the 0.55 true-PASS bar. Inverse-sqrt α=49.06× spread plus
+a 5× head LR delivered a smaller-than-expected lift.
+
+Sentinel checks (spec-defined for Phase 2):
+
+| Check | Threshold | Measured | Status |
+|---|---:|---:|:--:|
+| Bot AUROC | ≥ 0.65 | 0.4968 | FAIL |
+| Bot F1 | > 0.10 | 0.0000 | FAIL |
+| DoS-GoldenEye F1 | ≥ 0.40 | 0.4130 | PASS |
+| FTP-Patator F1 | ≥ 0.20 | 0.0752 | FAIL |
+
+Three of four sentinels fail. GoldenEye is the lone PASS — its F1
+trajectory M5.2 0.2278 → P1 0.2892 → P2 0.4130 is consistent with
+the design intent (rare-but-not-tiny class lifted by α). Bot remains
+stuck at F1=0 — the 12 val samples never get argmax-classified as
+Bot, and the AUROC actually went DOWN slightly vs P1 (0.5060 →
+0.4968 = below random).
+
+### Per-class trajectory (M5.2 CE / P1 / P2 noise-free)
+
+| Class | n_val | M5.2 F1 | P1 F1 | P2 F1 | M5.2 AUROC | P1 AUROC | P2 AUROC | Trend |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| BENIGN | 16,829 | 0.9793 | 0.9794 | 0.9778 | 0.8828 | 0.8967 | 0.9036 | flat F1, slight AUROC gain |
+| DoS Hulk | 105 | 0.6339 | 0.6667 | 0.6066 | 0.9309 | 0.9034 | 0.9051 | F1 regressed in P2 |
+| **PortScan** | 22 | 0.3889 | 0.2857 | **0.5957** | 0.9546 | 0.9531 | 0.9561 | **strong P2 lift** |
+| DDoS | 228 | 0.7411 | 0.6474 | 0.4590 | 0.9895 | 0.9894 | 0.9928 | F1 regressed both passes |
+| **DoS GoldenEye** | 61 | 0.2278 | 0.2892 | **0.4130** | 0.9406 | 0.9632 | 0.9524 | **steady gain to spec** |
+| FTP-Patator | 107 | 0.0775 | 0.0488 | 0.0752 | 0.8050 | 0.8606 | 0.9001 | AUROC up but F1 stuck |
+| SSH-Patator | 175 | 0.0948 | 0.0800 | 0.0804 | 0.8043 | 0.9129 | 0.9172 | AUROC up, F1 stuck |
+| DoS slowloris | 264 | 0.8566 | 0.8849 | 0.8880 | 0.9907 | 0.9954 | 0.9968 | best class steady gain |
+| DoS Slowhttptest | 105 | 0.1789 | 0.1846 | 0.1515 | 0.8960 | 0.9106 | 0.9120 | F1 small regression |
+| **Bot** | 12 | 0.0000 | 0.0000 | 0.0000 | 0.4077 | 0.5060 | **0.4968** | **F1 stuck, AUROC slipped** |
+| Heartbleed | 248 | 0.9655 | 0.9760 | 0.9841 | 0.9998 | 0.9999 | 0.9999 | saturated, slight gain |
+
+Pattern: P2 reweighting helps mid-rarity classes (GoldenEye, PortScan,
+Slowloris) where the alpha boost has enough sample count behind it to
+move argmax decisions; it does not help the FTP-Patator / SSH-Patator
+F1 (their AUROC lifted but argmax threshold not crossed) and it does
+not help Bot at all (12 val samples is too few to get over the
+argmax threshold, regardless of α). DDoS regressed more under P2 than
+under P1 — the head's 5× LR may be over-correcting on this class
+where vanilla CE was already reasonable.
+
+### Phase 3 decision (held for designer review)
+
+Combined macro_f1 in [0.40, 0.50] is below PASS-minimum but above
+red-flag. Per the M5.4 task spec, no Phase 3 is auto-launched. The
+result is forensically captured here for the next-session designer
+to decide between candidate Phase 3 directions:
+γ sweep at higher gamma (3 / 4 / 5 — the Bot-collapse hypothesis
+suggests stronger focusing might help), focused fine-tune from
+M5.2 ckpt (the deferred M5.10-style ablation), data-level
+intervention (rare-class oversampling), or accepting the M5.4 P2
+result as the M5.4 deliverable and proceeding to M5.5 baselines.
+
 ## Reproduction
 
 The four artefact bundles are stored alongside their source training
@@ -208,6 +303,7 @@ runs (each ``outputs/run_<ts>/`` directory is gitignored):
 - ``outputs/run_20260501_143946/m5_1_rerun/``
 - ``outputs/run_20260501_162117/m5_3_rerun/``
 - ``outputs/run_20260502_134735/m5_4_eval/``
+- ``outputs/run_20260502_184512/m5_4_phase2_eval/``
 
 Each bundle contains ``eval_metrics.json`` (full payload), a
 ``confusion_matrix.json``, a ``per_class_table.csv`` for direct

@@ -509,3 +509,70 @@ def test_grad_accumulation_math_skipped() -> None:
     + identical optimizer states across runs, which interacts subtly with
     bitsandbytes' 8-bit quantized state. Revisit in M4 alongside resume."""
     pytest.skip("TODO M4: rigorous accumulation-equivalence check")
+
+
+# ---------------------------------------------------------------------------
+# M5.4 Phase 2: backbone / head parameter groups for differential learning rate
+# ---------------------------------------------------------------------------
+
+
+def test_build_param_groups_separates_head_and_backbone() -> None:
+    """The M5.4 Phase 2 head set is {classifier, scale_token,
+    scale_embedding}. ``_build_param_groups`` must return exactly two
+    groups, with every classifier/scale_token/scale_embedding parameter
+    in group[1] (head) and every other parameter in group[0]
+    (backbone). The total parameter count across the two groups must
+    equal the model's total parameter count — no parameter dropped, no
+    parameter duplicated."""
+    from nid_video.trainer.trainer import _build_param_groups
+
+    model = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                                gradient_checkpointing=False)
+    groups = _build_param_groups(model, base_lr=1e-3, head_lr_multiplier=5.0)
+    assert len(groups) == 2
+
+    # Build expected head-name set from named_parameters
+    head_param_ids = set()
+    backbone_param_ids = set()
+    for name, p in model.named_parameters():
+        is_head = (name == "scale_token") or name.startswith(("classifier.", "scale_embedding."))
+        (head_param_ids if is_head else backbone_param_ids).add(id(p))
+
+    backbone_group_ids = {id(p) for p in groups[0]["params"]}
+    head_group_ids = {id(p) for p in groups[1]["params"]}
+    assert backbone_group_ids == backbone_param_ids
+    assert head_group_ids == head_param_ids
+    assert backbone_group_ids.isdisjoint(head_group_ids)
+
+    total = len(list(model.parameters()))
+    assert len(groups[0]["params"]) + len(groups[1]["params"]) == total
+
+
+def test_param_group_head_lr_multiplier_applied() -> None:
+    """Group 0 (backbone) gets base_lr; group 1 (head) gets
+    base_lr * head_lr_multiplier. Pin the multiplication."""
+    from nid_video.trainer.trainer import _build_param_groups
+
+    model = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                                gradient_checkpointing=False)
+    base_lr = 3e-4
+    multiplier = 5.0
+    groups = _build_param_groups(model, base_lr=base_lr, head_lr_multiplier=multiplier)
+    assert groups[0]["lr"] == pytest.approx(base_lr)
+    assert groups[1]["lr"] == pytest.approx(base_lr * multiplier)
+
+
+def test_param_group_default_multiplier_one_preserves_phase1_behaviour() -> None:
+    """With ``head_lr_multiplier=1.0`` the two groups have the same
+    effective LR — bit-equivalent to the M5.4 Phase 1 single-group path
+    (and to all earlier milestones). This is the backward-compat pin."""
+    from nid_video.trainer.trainer import _build_param_groups
+
+    model = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                                gradient_checkpointing=False)
+    groups = _build_param_groups(model, base_lr=1.5e-4, head_lr_multiplier=1.0)
+    assert groups[0]["lr"] == groups[1]["lr"]
+    # Total parameter coverage matches model.parameters()
+    total_in_groups = sum(1 for g in groups for _ in g["params"])
+    total_in_model = sum(1 for _ in model.parameters())
+    assert total_in_groups == total_in_model

@@ -14,7 +14,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from nid_video.trainer.loss import FocalLoss, build_criterion
+from nid_video.trainer.loss import (
+    FocalLoss,
+    build_criterion,
+    compute_inverse_sqrt_alpha,
+)
 from nid_video.utils.config import TrainingConfig
 
 
@@ -228,3 +232,89 @@ def test_build_criterion_dispatches_on_loss_fn_field() -> None:
     crit_focal = build_criterion(cfg_focal)
     assert isinstance(crit_focal, FocalLoss)
     assert crit_focal.gamma == 3.5
+
+
+# ---------------------------------------------------------------------------
+# M5.4 Phase 2: inverse-sqrt class reweighting (compute_inverse_sqrt_alpha)
+# ---------------------------------------------------------------------------
+
+
+def test_inverse_sqrt_alpha_correctness() -> None:
+    """For counts [100, 25, 4]:
+      raw = [1/10, 1/5, 1/2] = [0.1, 0.2, 0.5]
+      mean(present) = (0.1 + 0.2 + 0.5) / 3 = 0.2667
+      normalized = [0.375, 0.75, 1.875]
+    Pin the formula end-to-end."""
+    alpha = compute_inverse_sqrt_alpha([100, 25, 4], num_classes=3)
+    assert alpha.shape == (3,)
+    expected = torch.tensor([0.375, 0.75, 1.875])
+    assert torch.allclose(alpha, expected, atol=1e-4), (
+        f"inverse-sqrt alpha incorrect: got {alpha.tolist()}, expected {expected.tolist()}"
+    )
+
+
+def test_alpha_normalization_uses_only_present_classes() -> None:
+    """A zero-count class must not enter the mean denominator. Counts
+    [100, 25, 0, 4] → raw [0.1, 0.2, 0.0, 0.5] → mean over n>0 entries
+    only (0.2667), normalized [0.375, 0.75, 0.0, 1.875]. The n=0 entry
+    stays exactly 0; without this, the mean denominator would be wrong
+    (n=4 instead of n=3) and all normalised values would be inflated."""
+    alpha = compute_inverse_sqrt_alpha([100, 25, 0, 4], num_classes=4)
+    expected = torch.tensor([0.375, 0.75, 0.0, 1.875])
+    assert torch.allclose(alpha, expected, atol=1e-4), (
+        f"alpha with n=0 entry incorrect: got {alpha.tolist()}, expected {expected.tolist()}"
+    )
+    # Defensive: explicit zero check (atol could mask a sub-1e-4 bug)
+    assert alpha[2].item() == 0.0
+
+
+def test_alpha_handles_all_zero_count_classes_safely() -> None:
+    """Degenerate case: every class has n=0. compute_inverse_sqrt_alpha
+    must return all-zeros without div-by-zero or NaN. This guards
+    against a future split bug where the train partition is empty —
+    fail loud at training time via downstream metric checks rather than
+    crash inside the loss factory."""
+    alpha = compute_inverse_sqrt_alpha([0, 0, 0, 0, 0], num_classes=5)
+    assert alpha.shape == (5,)
+    assert torch.isfinite(alpha).all(), f"all-zero counts produced NaN/Inf: {alpha}"
+    assert (alpha == 0.0).all(), f"all-zero counts should give all-zero alpha: {alpha}"
+
+
+def test_compute_inverse_sqrt_alpha_validates_inputs() -> None:
+    """Length mismatch and negative counts must raise rather than be
+    silently truncated/padded. Forensic-clarity safeguard against
+    upstream split bugs."""
+    with pytest.raises(ValueError, match="length"):
+        compute_inverse_sqrt_alpha([1, 2, 3], num_classes=4)
+    with pytest.raises(ValueError, match="non-negative"):
+        compute_inverse_sqrt_alpha([1, -2, 3], num_classes=3)
+
+
+def test_compute_inverse_sqrt_alpha_returns_float32_cpu_tensor() -> None:
+    """Public-API contract: float32 tensor on CPU, regardless of input
+    type. Caller (scripts/train.py) is responsible for moving it to the
+    model's device."""
+    alpha = compute_inverse_sqrt_alpha([10, 100, 1000], num_classes=3)
+    assert alpha.dtype == torch.float32
+    assert alpha.device.type == "cpu"
+    # And from a torch.Tensor input, behaviour is identical
+    alpha_t = compute_inverse_sqrt_alpha(torch.tensor([10, 100, 1000]), num_classes=3)
+    assert torch.allclose(alpha, alpha_t)
+
+
+def test_focal_loss_alpha_none_equals_phase1_unchanged() -> None:
+    """Backward-compat pin: FocalLoss(gamma=2.0, alpha=None) (the Phase 1
+    construction) is bit-identical to building via build_criterion with
+    no alpha kwarg. Catches a regression where the new alpha-injection
+    path silently changes default behaviour."""
+    torch.manual_seed(0)
+    logits = torch.randn(8, 13)
+    targets = torch.randint(0, 13, (8,))
+
+    cfg = TrainingConfig(loss_fn="focal", focal_gamma=2.0)
+    crit_no_alpha = build_criterion(cfg)                  # alpha defaults to None
+    crit_explicit = FocalLoss(gamma=2.0, alpha=None)
+
+    a = crit_no_alpha(logits, targets)
+    b = crit_explicit(logits, targets)
+    assert torch.allclose(a, b, atol=1e-7)

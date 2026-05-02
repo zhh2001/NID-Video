@@ -53,19 +53,56 @@ class TrainResult:
     checkpoint_paths: list[Path] = field(default_factory=list)
 
 
+def _build_param_groups(
+    model: nn.Module,
+    base_lr: float,
+    head_lr_multiplier: float,
+) -> list[dict]:
+    """Split model parameters into two groups: backbone (Kinetics-pretrained)
+    at ``base_lr`` and head (fresh-init components) at
+    ``base_lr * head_lr_multiplier``.
+
+    Head = classifier + scale_token + scale_embedding. All three are
+    initialised at construction (Phase-2-of-M5.4 design point: fresh
+    components benefit from a higher LR than the slowly-fine-tuned
+    Kinetics backbone). Backbone = everything else, including the
+    patch_embed channels that mix Kinetics-init and Kaiming-init weights
+    (those Kaiming channels co-train with the rest of the encoder
+    pipeline; isolating them would over-engineer a third group).
+
+    With ``head_lr_multiplier=1.0`` (default), both groups have the same
+    effective LR — bit-equivalent to the single-group path used in
+    M5.4 Phase 1 and earlier.
+    """
+    head_prefixes = ("classifier.", "scale_embedding.")
+    head_params: list[torch.Tensor] = []
+    backbone_params: list[torch.Tensor] = []
+    for name, p in model.named_parameters():
+        is_head = (name == "scale_token") or any(name.startswith(pre) for pre in head_prefixes)
+        (head_params if is_head else backbone_params).append(p)
+    return [
+        {"params": backbone_params, "lr": float(base_lr)},
+        {"params": head_params, "lr": float(base_lr) * float(head_lr_multiplier)},
+    ]
+
+
 def _build_optimizer(
     model: nn.Module,
     cfg: TrainingConfig,
     optimizer_class: Callable | None,
 ) -> torch.optim.Optimizer:
-    """Return AdamW8bit / vanilla AdamW / caller-supplied class. lr & wd from config."""
+    """Return AdamW8bit / vanilla AdamW / caller-supplied class with
+    backbone+head param groups. wd from config; per-group lr set by
+    ``_build_param_groups`` based on ``cfg.head_lr_multiplier``.
+    """
+    param_groups = _build_param_groups(model, cfg.lr, cfg.head_lr_multiplier)
     if optimizer_class is not None:
-        return optimizer_class(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        return optimizer_class(param_groups, weight_decay=cfg.weight_decay)
     if cfg.optimizer == "adamw_8bit":
         from bitsandbytes.optim import AdamW8bit
-        return AdamW8bit(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        return AdamW8bit(param_groups, weight_decay=cfg.weight_decay)
     if cfg.optimizer == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        return torch.optim.AdamW(param_groups, weight_decay=cfg.weight_decay)
     raise ValueError(f"unknown optimizer in TrainingConfig: {cfg.optimizer!r}")
 
 
@@ -174,9 +211,19 @@ class Trainer:
         else:
             self.evaluator = None
 
+        # Report the *configured* per-group LRs (i.e. the values used as
+        # ``initial_lr`` by LambdaLR), not the live param_group["lr"] —
+        # LambdaLR sets the live value to ``initial_lr × cosine_factor(0)``
+        # = 0.0 at construction (the warmup-step-0 factor), which would
+        # be misleading in the startup log.
+        configured_backbone_lr = float(config.lr)
+        configured_head_lr = float(config.lr) * float(config.head_lr_multiplier)
         logger.info(
             f"Trainer ready: device={device}, precision={config.precision}, "
             f"optimizer={config.optimizer}, lr={config.lr}, wd={config.weight_decay}, "
+            f"head_lr_multiplier={config.head_lr_multiplier}, "
+            f"configured_backbone_lr={configured_backbone_lr:.2e}, "
+            f"configured_head_lr={configured_head_lr:.2e}, "
             f"batch_size={config.batch_size}, grad_accumulation={self.grad_accum}, "
             f"warmup_steps={self.warmup_steps}, total_steps={self.total_steps}, "
             f"min_lr_ratio={self.min_lr_ratio}, criterion={type(self.criterion).__name__}, "

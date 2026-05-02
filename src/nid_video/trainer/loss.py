@@ -116,14 +116,66 @@ class FocalLoss(nn.Module):
         )
 
 
-def build_criterion(cfg: TrainingConfig) -> nn.Module:
+def build_criterion(
+    cfg: TrainingConfig,
+    alpha: torch.Tensor | None = None,
+) -> nn.Module:
     """Pick the loss function based on ``cfg.loss_fn``. Default ``"ce"``
     yields ``nn.CrossEntropyLoss`` so any pre-M5.4 config or test that
     leaves ``loss_fn`` unset is byte-identical to today.
 
-    For ``"focal"`` returns ``FocalLoss(gamma=cfg.focal_gamma)`` with no
-    alpha (Phase 1 default; alpha is the Phase 2 hook).
+    For ``"focal"`` returns ``FocalLoss(gamma=cfg.focal_gamma, alpha=alpha)``.
+    ``alpha`` is the Phase 2 hook for per-class reweighting; pre-computed
+    by the caller (e.g. via :func:`compute_inverse_sqrt_alpha`) and
+    injected explicitly so this factory stays data-layer-agnostic.
     """
     if cfg.loss_fn == "focal":
-        return FocalLoss(gamma=cfg.focal_gamma)
+        return FocalLoss(gamma=cfg.focal_gamma, alpha=alpha)
     return nn.CrossEntropyLoss()
+
+
+def compute_inverse_sqrt_alpha(
+    class_counts: list[int] | torch.Tensor,
+    num_classes: int,
+) -> torch.Tensor:
+    """Compute per-class focal-loss alpha using inverse-sqrt frequency
+    weighting (M5.4 Phase 2). For each class ``c`` with training count
+    ``n_c``:
+
+      alpha_raw[c] = 1 / sqrt(n_c)        if n_c > 0
+                     0                     if n_c == 0
+
+    The raw alpha is then normalised so that its mean over the present
+    (n>0) classes equals 1. Classes with ``n=0`` keep alpha=0 — they
+    don't appear in training so their contribution to the loss is moot.
+
+    The output is a float32 tensor on CPU; the caller is responsible
+    for moving it to the model's device when constructing the
+    ``FocalLoss`` instance.
+
+    Args:
+      class_counts: per-class training-sample counts. Length must equal
+        ``num_classes``; entries are non-negative integers.
+      num_classes: expected length of ``class_counts``. Validated for
+        forensic clarity — silently truncating or padding would mask
+        upstream split bugs.
+    """
+    counts = list(class_counts)
+    if len(counts) != num_classes:
+        raise ValueError(
+            f"class_counts length {len(counts)} != num_classes {num_classes}"
+        )
+    if any(c < 0 for c in counts):
+        raise ValueError(f"class_counts must be non-negative; got {counts}")
+
+    raw = torch.zeros(num_classes, dtype=torch.float32)
+    for i, n in enumerate(counts):
+        if n > 0:
+            raw[i] = 1.0 / float(n) ** 0.5
+    present = raw[raw > 0]
+    if present.numel() == 0:
+        # Degenerate: all classes have n=0. Return all-zeros and let the
+        # caller decide what that means for their pipeline.
+        return raw
+    mean_present = present.mean()
+    return raw / mean_present
