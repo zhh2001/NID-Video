@@ -62,23 +62,42 @@ def _build_param_groups(
     at ``base_lr`` and head (fresh-init components) at
     ``base_lr * head_lr_multiplier``.
 
-    Head = classifier + scale_token + scale_embedding. All three are
-    initialised at construction (Phase-2-of-M5.4 design point: fresh
-    components benefit from a higher LR than the slowly-fine-tuned
-    Kinetics backbone). Backbone = everything else, including the
-    patch_embed channels that mix Kinetics-init and Kaiming-init weights
-    (those Kaiming channels co-train with the rest of the encoder
-    pipeline; isolating them would over-engineer a third group).
+    Head = classifier + scale_token + scale_embedding + library-wrapped
+    classifiers (torchvision-style ``.fc.``, pytorchvideo-style ``.proj.``
+    on the terminal block). All are initialised at construction
+    (Phase-2-of-M5.4 design point: fresh components benefit from a
+    higher LR than the slowly-fine-tuned Kinetics backbone). Backbone =
+    everything else, including the patch_embed channels that mix
+    Kinetics-init and Kaiming-init weights (those Kaiming channels
+    co-train with the rest of the encoder pipeline; isolating them
+    would over-engineer a third group).
+
+    Matcher: dot-separated **segment** match — a parameter is a head
+    param iff one of its ancestor module names is exactly
+    ``classifier``, ``scale_embedding``, ``fc``, or ``proj``. Covers
+    flat M5.4 layouts (``classifier.weight``), HF wrappers
+    (``backbone.classifier.weight``), torchvision video backbones
+    (``model.fc.weight``, ``fc.weight``), and pytorchvideo I3D /
+    SlowFast variants (``blocks.4.proj.weight``). The M5.4 P2 main
+    method's ``classifier.weight`` still matches; behaviour is
+    bit-identical for VideoMAE-Small.
+
+    Why segment match instead of substring: avoids false positives like
+    ``pre_classifier.weight`` (substring ``classifier.`` matches but the
+    module name is ``pre_classifier``, not ``classifier``).
 
     With ``head_lr_multiplier=1.0`` (default), both groups have the same
     effective LR — bit-equivalent to the single-group path used in
     M5.4 Phase 1 and earlier.
     """
-    head_prefixes = ("classifier.", "scale_embedding.")
+    head_segments = {"classifier", "scale_embedding", "fc", "proj"}
     head_params: list[torch.Tensor] = []
     backbone_params: list[torch.Tensor] = []
     for name, p in model.named_parameters():
-        is_head = (name == "scale_token") or any(name.startswith(pre) for pre in head_prefixes)
+        # Drop the final attribute (.weight / .bias / etc.) — we want
+        # the module-path segments, not the parameter name.
+        ancestors = name.split(".")[:-1]
+        is_head = (name == "scale_token") or any(seg in head_segments for seg in ancestors)
         (head_params if is_head else backbone_params).append(p)
     return [
         {"params": backbone_params, "lr": float(base_lr)},

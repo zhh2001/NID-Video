@@ -576,3 +576,92 @@ def test_param_group_default_multiplier_one_preserves_phase1_behaviour() -> None
     total_in_groups = sum(1 for g in groups for _ in g["params"])
     total_in_model = sum(1 for _ in model.parameters())
     assert total_in_groups == total_in_model
+
+
+# ---------------------------------------------------------------------------
+# M5.5 R1.5 matcher fix: head discovery survives nested classifier paths
+# ---------------------------------------------------------------------------
+
+
+def test_build_param_groups_matches_head_in_nested_backbone() -> None:
+    """HF-style wrappers (TimesformerForVideoClassification etc.) place
+    the classifier at ``backbone.classifier`` rather than top-level.
+    Param names like ``backbone.classifier.weight`` must still land in
+    the head group — the original M5.4 P2 ``startswith("classifier.")``
+    matcher silently bypassed them, training the head at backbone_lr
+    rather than backbone_lr × head_lr_multiplier. Substring matcher
+    fixes this; pin the discovery here so future refactors of the
+    M5.5 baselines don't regress."""
+    from nid_video.models.timesformer_small_nid import TimeSformerSmallForNID
+    from nid_video.trainer.trainer import _build_param_groups
+
+    model = TimeSformerSmallForNID(num_classes=13, gradient_checkpointing=False)
+    groups = _build_param_groups(model, base_lr=1.5e-4, head_lr_multiplier=5.0)
+
+    head_ids = {id(p) for p in groups[1]["params"]}
+    head_names = [name for name, p in model.named_parameters() if id(p) in head_ids]
+
+    # Both classifier params (weight + bias) must appear in head group.
+    assert "backbone.classifier.weight" in head_names, (
+        f"backbone.classifier.weight missing from head group "
+        f"(matcher regression?). head names: {head_names}"
+    )
+    assert "backbone.classifier.bias" in head_names
+
+    # Group-level lr is the configured 5× multiplier.
+    assert groups[1]["lr"] == pytest.approx(1.5e-4 * 5.0)
+
+    # Sanity: head count is small (just classifier weights), backbone is large.
+    head_n = sum(p.numel() for p in groups[1]["params"])
+    backbone_n = sum(p.numel() for p in groups[0]["params"])
+    assert head_n > 0, "head group is empty — matcher missed the classifier"
+    assert backbone_n > 100 * head_n, (
+        f"head/backbone ratio looks off: head={head_n}, backbone={backbone_n}"
+    )
+
+
+def test_build_param_groups_matches_torchvision_fc_and_pytorchvideo_proj() -> None:
+    """torchvision video backbones expose the classification head as
+    ``model.fc`` (e.g. r2plus1d_18, r3d_18); pytorchvideo's I3D /
+    SlowFast variants expose it as ``blocks[-1].proj``. Pin substring
+    matching for ``.fc.`` and ``.proj.`` so the M5.5 R2 K400-pretrained
+    baselines reach the head group at construction time, without each
+    baseline needing to re-expose ``self.classifier`` as a top-level
+    alias."""
+    from torch import nn
+    from nid_video.trainer.trainer import _build_param_groups
+
+    class _MockTorchvisionStyle(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stem = nn.Conv3d(6, 32, kernel_size=3, padding=1)
+            self.fc = nn.Linear(32, 13)
+
+    class _MockPytorchvideoStyle(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.blocks = nn.ModuleList([
+                nn.Conv3d(6, 32, kernel_size=3, padding=1),
+                nn.Sequential(
+                    nn.AdaptiveAvgPool3d(1),
+                    nn.Flatten(),
+                ),
+            ])
+            self.blocks.append(nn.ModuleDict({"proj": nn.Linear(32, 13)}))
+
+    for kind, mock_cls in (("torchvision-fc", _MockTorchvisionStyle),
+                           ("pytorchvideo-proj", _MockPytorchvideoStyle)):
+        m = mock_cls()
+        groups = _build_param_groups(m, base_lr=1.5e-4, head_lr_multiplier=5.0)
+        head_ids = {id(p) for p in groups[1]["params"]}
+        head_names = [name for name, p in m.named_parameters() if id(p) in head_ids]
+        assert len(head_names) >= 2, (
+            f"{kind}: expected ≥2 head params (weight+bias), got {head_names}"
+        )
+        # All head names should contain the kind-specific terminal segment.
+        terminal = "fc" if kind == "torchvision-fc" else "proj"
+        for name in head_names:
+            assert terminal in name.split("."), (
+                f"{kind}: head param {name!r} doesn't carry expected "
+                f"segment {terminal!r}"
+            )

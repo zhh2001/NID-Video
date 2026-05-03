@@ -30,7 +30,8 @@ predictions for the full val split, and partitions on each sample's
 | M5.2 | 10 | 48,530 | 0.5143 | **0.4677** | −0.0466 | 0.4402 | 0.4077 | CE |
 | M5.4 P1 | 10 | 48,530 | 0.4584 ⁂ | **0.4584** ⁂ | 0.0000 ⁂ | 0.5060 ⁂ | 0.5060 | focal γ=2 |
 | M5.4 P2 | 10 | 48,530 | 0.4756 ⁂ | **0.4756** ⁂ | 0.0000 ⁂ | 0.4968 ⁂ | 0.4968 | focal γ=2 + inv-sqrt α + head LR ×5 |
-| M5.5 R1 (TimeSformer-Small) | 10 | 48,530 | 0.4836 ⁂ | **0.4836** ⁂ | 0.0000 ⁂ | 0.7151 ⁂ | 0.7151 | focal γ=2 + inv-sqrt α + head LR ×5 (baseline; 30.8M random-init) |
+| ~~M5.5 R1~~ (superseded) | ~~10~~ | ~~48,530~~ | ~~0.4836~~ ⁂ | ~~**0.4836**~~ ⁂ | ~~0.0000~~ ⁂ | ~~0.7151~~ ⁂ | ~~0.7151~~ | ~~focal γ=2 + inv-sqrt α + head LR ×5 (baseline; 30.8M random-init)~~ — head_lr×5 silently bypassed (M5.5 R1.5 forensic finding); see ↓ |
+| M5.5 R1.5 (TimeSformer-Small, head_lr×5 active) | 10 | 48,530 | 0.4616 ⁂ | **0.4616** ⁂ | 0.0000 ⁂ | 0.5940 ⁂ | 0.5940 | focal γ=2 + inv-sqrt α + head LR ×5 (baseline; 30.8M random-init) |
 
 † M4.8's original training task output was retained only in
 in-conversation records; the value 0.7411 is the figure cited there.
@@ -400,68 +401,97 @@ the forward signature but ignored — the model is scale-agnostic by
 design and consumes the multi-scale dataloader's mixed batches without
 conditioning on which stream a sample came from.
 
-Run dir ``outputs/run_20260502_232207``; best epoch = 9 (final);
-``best.pt`` at ``ckpt/best.pt``. Wall time 15,989 s ≈ 4.4 h. Peak GPU
+#### M5.5 R1 → R1.5 forensic finding: head_lr_multiplier matcher fix
+
+R1's first run (``outputs/run_20260502_232207/``, commit ``bac6c67``)
+recorded combined macro_f1 = 0.4836 / Bot AUROC = 0.7151. While
+preparing R2 baselines we discovered that the trainer's
+``_build_param_groups`` head matcher used ``startswith("classifier.",
+"scale_embedding.")`` — designed for VideoMAE's flat ``classifier``
+attribute, but blind to HF wrappers that nest the classifier at
+``backbone.classifier``. TimeSformer-Small therefore trained with
+**head_lr_multiplier=1.0 effective** (5,005 head params silently in
+the backbone group at base_lr=1.5e-4 instead of head_lr=7.5e-4).
+
+R1.5 (``outputs/run_20260503_121046/``, this commit) replaces the
+original R1 with the matcher fixed (segment match across
+``classifier`` / ``scale_embedding`` / ``fc`` / ``proj`` ancestors,
+covering HF wrappers, torchvision ``model.fc``, and pytorchvideo
+``blocks[-1].proj``). The retrain was bit-equivalent in every other
+respect to the R1 run.
+
+Run dir ``outputs/run_20260503_121046``; best epoch = 9 (final);
+``best.pt`` at ``ckpt/best.pt``. Wall time 17,245 s ≈ 4.79 h. Peak GPU
 1004 MB (with gradient checkpointing on; without checkpointing the
 30.8M model OOMs at batch=32 on the 8 GB target box).
 
 Noise-free numbers (verbatim from
-``outputs/run_20260502_232207/m5_5_timesformer_small_eval/eval_metrics.json``):
+``outputs/run_20260503_121046/m5_5_timesformer_small_eval/eval_metrics.json``):
 
-  combined macro_f1   : 0.4836
-  combined accuracy   : 0.9367
-  combined auroc      : 0.7890
-  fast-only macro_f1  : 0.4547
-  slow-only macro_f1  : 0.6254
-  Bot per-class AUROC : 0.7151
+  combined macro_f1   : 0.4616
+  combined accuracy   : 0.9441
+  combined auroc      : 0.7754
+  fast-only macro_f1  : 0.4339
+  slow-only macro_f1  : 0.6226
+  Bot per-class AUROC : 0.5940
   val_sample_count    : 18,156   (fast 16,463 + slow 1,693)
 
-Head-to-head with the main method at the identical 10-epoch budget:
+Three-way comparison at the identical 10-epoch budget:
 
-  M5.4 P2 (main, K400-pretrained 22M)   combined : 0.4756  fast : 0.4525  slow : 0.6069  Bot AUROC : 0.4968
-  M5.5 R1 TimeSformer-Small (random 31M) combined : 0.4836  fast : 0.4547  slow : 0.6254  Bot AUROC : 0.7151
+  M5.4 P2  (main, K400-pretrained 22M, head_lr ×5)         combined : 0.4756  fast : 0.4525  slow : 0.6069  Bot AUROC : 0.4968
+  M5.5 R1  TimeSformer-Small (random 31M, head_lr ×1 eff.) combined : 0.4836  fast : 0.4547  slow : 0.6254  Bot AUROC : 0.7151
+  M5.5 R1.5 TimeSformer-Small (random 31M, head_lr ×5)     combined : 0.4616  fast : 0.4339  slow : 0.6226  Bot AUROC : 0.5940
 
-  Δ combined  : +0.0080
-  Δ fast-only : +0.0022
-  Δ slow-only : +0.0185
-  Δ Bot AUROC : +0.2183
+  Δ R1.5 vs M5.4 P2  : combined −0.0140  fast −0.0186  slow +0.0157  Bot AUROC +0.0972
+  Δ R1.5 vs R1       : combined −0.0220  fast −0.0208  slow −0.0028  Bot AUROC −0.1211
 
-TimeSformer-Small (random init) lifts combined macro_f1 by +0.008 over
-the K400-pretrained main method, with the gain concentrated in the
-slow stream (+0.019 vs +0.002 fast) and a substantial +0.218 lift in
-Bot per-class AUROC. This is informative in two directions:
+Two findings carry through the matcher correction:
 
-1. Divided space-time attention is a competitive representation for
-   the (T=16, 32×64) NID tensor at this parameter scale, even without
-   pretraining — meaning the Kinetics-400 prior does not, on its own,
-   account for the main method's score.
-2. The Bot rare-class signal that M5.4 P1/P2 actively chased (focal +
-   inverse-sqrt) survives much better in TimeSformer-Small. The 0.7151
-   value sits between M4.8's 0.7247 (vanilla CE, 1 epoch — under-fit
-   so Bot signal is preserved by accident) and M5.4 P2's 0.4968 (10
-   epochs, 22M VideoMAE collapsed Bot despite the loss intervention).
-   This suggests the rare-class collapse seen in M5.2/M5.4 is at
-   least partly architecture-dependent rather than a pure
-   data-imbalance phenomenon — the focal+α intervention works
-   noticeably better when the backbone does not commit to the
-   majority-class boundary as aggressively.
+1. **head_lr ×5 is harmful for from-scratch TimeSformer-Small.**
+   Applying it (R1 → R1.5) drops combined macro_f1 by 0.022 and
+   collapses Bot per-class F1 from 0.0909 to 0.0 (Bot AUROC 0.7151
+   → 0.5940). Mechanism: with a randomly initialised backbone, both
+   head and backbone are equally fresh; running the head at 5× LR
+   makes it overshoot toward the majority-class decision boundary
+   while the backbone is still learning basic features. The
+   M5.4 Phase-2 head LR multiplier was justified for K400-pretrained
+   backbones (slow backbone preserves pretraining; fast head learns
+   the new head from scratch); the same intervention is **not
+   transferable** to from-scratch baselines under the same nominal
+   "fairness contract".
+2. **Architectural representation still helps the slow stream.** Even
+   in R1.5 (matcher-corrected, head_lr ×5 active), TimeSformer-Small's
+   slow-only macro_f1 (0.6226) exceeds M5.4 P2's (0.6069) by +0.016,
+   and Bot AUROC stays above (0.5940 vs 0.4968, +0.097). Divided
+   space-time attention apparently captures longer-tempo patterns
+   slightly better than VideoMAE-Small's joint attention at this
+   data scale — a real but smaller effect than R1's pre-fix headline
+   suggested.
 
-These are Round 1 readings on a five-row table; the conclusion above
-is provisional until rounds 2-3 fill in I3D / R(2+1)D-18 / C3D-Small /
-ConvLSTM and the Kinetics-pretrained vs random columns are populated
-across the full suite.
+The Round 1 commit (``bac6c67``) and its run directory
+(``outputs/run_20260502_232207/``) are preserved as a forensic
+record. The artefact-bundle README in
+``outputs/run_20260502_232207/m5_5_timesformer_small_eval/README.md``
+carries a SUPERSEDED banner pointing to R1.5; the R1 numbers must
+not be cited as baseline results.
 
-### M5.5 Round 1 deliverable
+These are Round 1.5 readings on a five-row table; the conclusion
+above is provisional until rounds 2-3 fill in I3D / R(2+1)D-18 /
+C3D-Small / ConvLSTM and the Kinetics-pretrained vs random columns
+are populated across the full suite.
+
+### M5.5 Round 1.5 deliverable
 
   baseline       : TimeSformer-Small (random init, 30.8M params)
-  configuration  : focal gamma=2 + inverse_sqrt class reweighting + head LR ×5
-  combined macro_f1 (noise-free, no_cycle eval) : 0.4836
-  fast-only macro_f1 : 0.4547
-  slow-only macro_f1 : 0.6254
+  configuration  : focal gamma=2 + inverse_sqrt class reweighting + head LR ×5 (matcher-fixed; actually applies)
+  combined macro_f1 (noise-free, no_cycle eval) : 0.4616
+  fast-only macro_f1 : 0.4339
+  slow-only macro_f1 : 0.6226
   budget         : 10 epochs, 48,530 grad steps, batch=32 / accum=1
   splits         : data/processed/cicids2017_dt100ms_v2/splits.parquet
-  ckpt           : outputs/run_20260502_232207/ckpt/best.pt
-  artefact       : outputs/run_20260502_232207/m5_5_timesformer_small_eval/
+  ckpt           : outputs/run_20260503_121046/ckpt/best.pt
+  artefact       : outputs/run_20260503_121046/m5_5_timesformer_small_eval/
+  supersedes     : Round 1 (commit bac6c67, run_20260502_232207/) — preserved as forensic record
 
 ## Reproduction
 
@@ -473,7 +503,8 @@ runs (each ``outputs/run_<ts>/`` directory is gitignored):
 - ``outputs/run_20260501_162117/m5_3_rerun/``
 - ``outputs/run_20260502_134735/m5_4_eval/``
 - ``outputs/run_20260502_184512/m5_4_phase2_eval/``
-- ``outputs/run_20260502_232207/m5_5_timesformer_small_eval/``
+- ``outputs/run_20260502_232207/m5_5_timesformer_small_eval/`` (SUPERSEDED — R1, head_lr×5 not actually applied; preserved forensic-only)
+- ``outputs/run_20260503_121046/m5_5_timesformer_small_eval/`` (R1.5, matcher-fixed)
 
 Each bundle contains ``eval_metrics.json`` (full payload), a
 ``confusion_matrix.json``, a ``per_class_table.csv`` for direct
