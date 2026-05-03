@@ -255,9 +255,23 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=training_cfg.gradient_checkpointing,
         )
+    if name == "i3d":
+        from nid_video.models.i3d_nid import I3DForNID
+        # I3D-R50 inherits Kinetics-400 weights from pytorchvideo's hub.
+        # Per Path B (K400 pretrained group), trains with --head-lr-mul 5.0.
+        # ``--pretrained`` is interpreted as a boolean flag here: any
+        # truthy non-empty value loads K400; empty / "none" / "false"
+        # forces random init.
+        load_pretrained = bool(pretrained) and pretrained.lower() not in ("none", "false", "0", "")
+        return I3DForNID(
+            num_classes=n_classes,
+            pretrained=load_pretrained,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
     raise SystemExit(
         f"--model {name!r} not yet implemented in M5.5 (Round 2+ adds "
-        f"i3d / r2plus1d_18)"
+        f"r2plus1d_18)"
     )
 
 

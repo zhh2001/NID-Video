@@ -142,9 +142,18 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=False,
         )
+    if name == "i3d":
+        from nid_video.models.i3d_nid import I3DForNID
+        # baseline_rerun loads weights from --resume; pretrained=False
+        # avoids re-downloading the K400 ckpt at re-eval time.
+        return I3DForNID(
+            num_classes=n_classes,
+            pretrained=False,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
+        )
     raise SystemExit(
-        f"--model {name!r} not yet implemented (Round 2+ adds i3d / "
-        f"r2plus1d_18)"
+        f"--model {name!r} not yet implemented (Round 2+ adds r2plus1d_18)"
     )
 
 
