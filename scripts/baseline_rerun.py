@@ -135,9 +135,16 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=False,
         )
+    if name == "convlstm":
+        from nid_video.models.convlstm_nid import ConvLSTMForNID
+        return ConvLSTMForNID(
+            num_classes=n_classes,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
+        )
     raise SystemExit(
         f"--model {name!r} not yet implemented (Round 2+ adds i3d / "
-        f"r2plus1d_18 / convlstm)"
+        f"r2plus1d_18)"
     )
 
 

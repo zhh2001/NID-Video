@@ -246,9 +246,18 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=training_cfg.gradient_checkpointing,
         )
+    if name == "convlstm":
+        from nid_video.models.convlstm_nid import ConvLSTMForNID
+        # ConvLSTM runs random-init from scratch — no canonical
+        # video-action pretrained ckpt at this hidden size.
+        return ConvLSTMForNID(
+            num_classes=n_classes,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
     raise SystemExit(
         f"--model {name!r} not yet implemented in M5.5 (Round 2+ adds "
-        f"i3d / r2plus1d_18 / convlstm)"
+        f"i3d / r2plus1d_18)"
     )
 
 
