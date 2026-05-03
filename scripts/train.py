@@ -236,9 +236,19 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             num_frames=16,
             gradient_checkpointing=training_cfg.gradient_checkpointing,
         )
+    if name == "c3d_small":
+        from nid_video.models.c3d_small_nid import C3DSmallForNID
+        # C3D-Small runs random-init from scratch (no public small
+        # variant K400 ckpt at the project's input scale). --pretrained
+        # is silently ignored — the constructor takes none.
+        return C3DSmallForNID(
+            num_classes=n_classes,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
     raise SystemExit(
         f"--model {name!r} not yet implemented in M5.5 (Round 2+ adds "
-        f"c3d_small / i3d / r2plus1d_18 / convlstm)"
+        f"i3d / r2plus1d_18 / convlstm)"
     )
 
 

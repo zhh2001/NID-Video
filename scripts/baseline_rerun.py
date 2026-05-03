@@ -128,9 +128,16 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
             num_frames=16,
             gradient_checkpointing=False,
         )
+    if name == "c3d_small":
+        from nid_video.models.c3d_small_nid import C3DSmallForNID
+        return C3DSmallForNID(
+            num_classes=n_classes,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
+        )
     raise SystemExit(
-        f"--model {name!r} not yet implemented (Round 2+ adds c3d_small / "
-        f"i3d / r2plus1d_18 / convlstm)"
+        f"--model {name!r} not yet implemented (Round 2+ adds i3d / "
+        f"r2plus1d_18 / convlstm)"
     )
 
 
