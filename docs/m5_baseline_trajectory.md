@@ -29,9 +29,9 @@ predictions for the full val split, and partitions on each sample's
 | M5.1 | 3 | 14,559 | 0.5113 | **0.4230** | −0.0883 | n/a ‡ | 0.4237 | CE |
 | M5.2 | 10 | 48,530 | 0.5143 | **0.4677** | −0.0466 | 0.4402 | 0.4077 | CE |
 | M5.4 P1 | 10 | 48,530 | 0.4584 ⁂ | **0.4584** ⁂ | 0.0000 ⁂ | 0.5060 ⁂ | 0.5060 | focal γ=2 |
-| M5.4 P2 | 10 | 48,530 | 0.4756 ⁂ | **0.4756** ⁂ | 0.0000 ⁂ | 0.4968 ⁂ | 0.4968 | focal γ=2 + inv-sqrt α + head LR ×5 |
-| ~~M5.5 R1~~ (superseded) | ~~10~~ | ~~48,530~~ | ~~0.4836~~ ⁂ | ~~**0.4836**~~ ⁂ | ~~0.0000~~ ⁂ | ~~0.7151~~ ⁂ | ~~0.7151~~ | ~~focal γ=2 + inv-sqrt α + head LR ×5 (baseline; 30.8M random-init)~~ — head_lr×5 silently bypassed (M5.5 R1.5 forensic finding); see ↓ |
-| M5.5 R1.5 (TimeSformer-Small, head_lr×5 active) | 10 | 48,530 | 0.4616 ⁂ | **0.4616** ⁂ | 0.0000 ⁂ | 0.5940 ⁂ | 0.5940 | focal γ=2 + inv-sqrt α + head LR ×5 (baseline; 30.8M random-init) |
+| M5.4 P2 | 10 | 48,530 | 0.4756 ⁂ | **0.4756** ⁂ | 0.0000 ⁂ | 0.4968 ⁂ | 0.4968 | focal γ=2 + inv-sqrt α + head LR ×5 (K400 contract) |
+| M5.5 R1 (TimeSformer-Small) ★ | 10 | 48,530 | 0.4836 ⁂ | **0.4836** ⁂ | 0.0000 ⁂ | 0.7151 ⁂ | 0.7151 | focal γ=2 + inv-sqrt α + head LR ×1 effective (random-init contract; 30.8M) |
+| M5.5 R1.5 (TimeSformer-Small) — ablation supplementary | 10 | 48,530 | 0.4616 ⁂ | **0.4616** ⁂ | 0.0000 ⁂ | 0.5940 ⁂ | 0.5940 | focal γ=2 + inv-sqrt α + head LR ×5 intentional (off-contract; 30.8M random-init) |
 
 † M4.8's original training task output was retained only in
 in-conversation records; the value 0.7411 is the figure cited there.
@@ -48,6 +48,22 @@ numbers are bit-identical — Δ = 0.0000 by construction. There is no
 M5.4 P1 is the noise-free value reproduced once (0.5060) — the column
 duplication is intentional, to keep the table shape consistent across
 rows.
+
+★ Per the Path B fairness contract (see "M5.5 R1 → R1.5 forensic
+finding" below + `m5_5_baselines.md`), the cited M5.5 baseline number
+for TimeSformer-Small is **R1's 0.4836** — random-init backbone
+trained with effective head_lr ×1. R1 was originally launched with
+`--head-lr-multiplier 5.0` but the trainer's pre-fix head matcher
+silently bypassed the multiplier (5,005 head params landed in the
+backbone group); the resulting head_lr ×1 effective configuration is
+the **correct fairness contract for from-scratch backbones** under
+Path B. R1.5 (matcher-fixed, head_lr ×5 actually applied) is the
+ablation supplementary that empirically validated the Path B
+grouping: Δ R1.5 vs R1 = combined −0.022 / Bot AUROC −0.121, i.e.
+applying head_lr ×5 to a from-scratch backbone HURTS. The four M5.5
+Round 2 baselines (C3D-Small, ConvLSTM, I3D, R(2+1)D-18) are
+recorded in `docs/m5_5_baselines.md` rather than added as rows here,
+to keep this trajectory focused on the single-model time-budget axis.
 
 ### val_sample_count_total bit-identity
 
@@ -371,14 +387,14 @@ fairness contract.
 
 ### Pretrained-checkpoint asymmetry across the suite
 
-| Baseline | Params | Pretrained source | Note |
-|---|---:|---|---|
-| VideoMAE-Small (main, M4.8/M5.x) | 22M | Kinetics-400 | Adapted 3→6 channels via `adapt_conv3d_to_6ch`. |
-| TimeSformer-Small | 30.8M | none (random init) | Divided space-time at hidden=384; no public 22M K400 checkpoint at this scale. |
-| C3D-Small | TBD | none (random init) | Round 2. |
-| I3D | TBD | Kinetics-400 | Round 2 — adapter via `adapt_conv3d_to_6ch`. |
-| R(2+1)D-18 | TBD | Kinetics-400 | Round 2 — adapter via `adapt_conv3d_to_6ch`. |
-| ConvLSTM | TBD | none (random init) | Round 3. |
+| Baseline | Params | Pretrained source | head_lr (Path B) | Note |
+|---|---:|---|---:|---|
+| VideoMAE-Small (main, M4.8/M5.x) | 22M | Kinetics-400 | ×5 | Adapted 3→6 channels via `adapt_conv3d_to_6ch`. |
+| TimeSformer-Small | 30.8M | none (random init) | ×1 | Divided space-time at hidden=384; no public 22M K400 ckpt. |
+| C3D-Small | 18.8M | none (random init) | ×1 | 8 Conv3d (64/128/256/256/384/384/384/384) + 5 max-pool + FC (1024/512/13). |
+| ConvLSTM | 13.0M | none (random init) | ×1 | 3-layer ConvLSTM with 2×2 spatial pool between cells (hidden 64→128→256). |
+| I3D-R50 | 27.3M | Kinetics-400 (pytorchvideo) | ×5 | Adapter `adapt_conv3d_to_6ch` on `blocks[0].conv` (5×7×7, identity transform). |
+| R(2+1)D-18 | 31.3M | Kinetics-400 (torchvision) | ×5 | Adapter `adapt_conv3d_to_6ch` on `stem[0]` (1×7×7, identity transform). |
 
 Among the five baselines, R(2+1)D-18 and I3D inherit Kinetics weights;
 TimeSformer-Small, C3D-Small, and ConvLSTM run from scratch. This
@@ -387,6 +403,16 @@ parameter scale, not a project choice. The R(2+1)D-18 and I3D rows
 serve as the upper bound for "Kinetics-pretrained video backbone on
 this task" and address whether the main method's advantage stems from
 pretraining or from representation × backbone alignment specifically.
+
+Per the M5.5 Path B contract (validated by R1 vs R1.5 ablation,
+documented below + in `m5_5_baselines.md`), `head_lr_multiplier` is
+grouped by pretrained-status: K400-pretrained backbones train with
+head_lr ×5 (preserves pretraining via slow backbone, fast head learns
+new classifier from scratch); random-init backbones train with
+head_lr ×1 (both head and backbone are equally fresh; an asymmetric
+LR overshoots toward majority-class boundary). The full six-row data
+table + 13×6 per-class grand tables + Methods-section draft live in
+`docs/m5_5_baselines.md`.
 
 ### M5.5 Round 1: TimeSformer-Small (random init from scratch)
 
@@ -401,97 +427,94 @@ the forward signature but ignored — the model is scale-agnostic by
 design and consumes the multi-scale dataloader's mixed batches without
 conditioning on which stream a sample came from.
 
-#### M5.5 R1 → R1.5 forensic finding: head_lr_multiplier matcher fix
+#### M5.5 R1 → R1.5 forensic finding: head_lr_multiplier matcher fix and the Path B head_lr split
 
 R1's first run (``outputs/run_20260502_232207/``, commit ``bac6c67``)
-recorded combined macro_f1 = 0.4836 / Bot AUROC = 0.7151. While
-preparing R2 baselines we discovered that the trainer's
-``_build_param_groups`` head matcher used ``startswith("classifier.",
-"scale_embedding.")`` — designed for VideoMAE's flat ``classifier``
-attribute, but blind to HF wrappers that nest the classifier at
-``backbone.classifier``. TimeSformer-Small therefore trained with
-**head_lr_multiplier=1.0 effective** (5,005 head params silently in
-the backbone group at base_lr=1.5e-4 instead of head_lr=7.5e-4).
+launched with ``--head-lr-multiplier 5.0`` but the trainer's pre-fix
+head matcher used ``startswith("classifier.", "scale_embedding.")`` —
+designed for VideoMAE's flat ``classifier`` attribute, blind to HF
+wrappers that nest the classifier at ``backbone.classifier``.
+TimeSformer-Small therefore trained with **head_lr_multiplier=1.0
+effective** (5,005 head params silently in the backbone group at
+base_lr=1.5e-4 instead of the configured head_lr=7.5e-4).
 
-R1.5 (``outputs/run_20260503_121046/``, this commit) replaces the
-original R1 with the matcher fixed (segment match across
-``classifier`` / ``scale_embedding`` / ``fc`` / ``proj`` ancestors,
-covering HF wrappers, torchvision ``model.fc``, and pytorchvideo
-``blocks[-1].proj``). The retrain was bit-equivalent in every other
+R1.5 (``outputs/run_20260503_121046/``, commit ``3187a67``) fixed the
+matcher (segment match across ``classifier`` / ``scale_embedding`` /
+``fc`` / ``proj`` ancestors — covering HF wrappers, torchvision
+``model.fc``, and pytorchvideo ``blocks[-1].proj``) and re-ran
+TimeSformer-Small with the multiplier actually applied at
+``head_lr=7.5e-4``. The retrain was bit-equivalent in every other
 respect to the R1 run.
 
-Run dir ``outputs/run_20260503_121046``; best epoch = 9 (final);
-``best.pt`` at ``ckpt/best.pt``. Wall time 17,245 s ≈ 4.79 h. Peak GPU
-1004 MB (with gradient checkpointing on; without checkpointing the
-30.8M model OOMs at batch=32 on the 8 GB target box).
-
-Noise-free numbers (verbatim from
-``outputs/run_20260503_121046/m5_5_timesformer_small_eval/eval_metrics.json``):
-
-  combined macro_f1   : 0.4616
-  combined accuracy   : 0.9441
-  combined auroc      : 0.7754
-  fast-only macro_f1  : 0.4339
-  slow-only macro_f1  : 0.6226
-  Bot per-class AUROC : 0.5940
-  val_sample_count    : 18,156   (fast 16,463 + slow 1,693)
+The result reframes the R1 number as a **lucky coincidence under the
+correct contract**, not a bug:
 
 Three-way comparison at the identical 10-epoch budget:
 
-  M5.4 P2  (main, K400-pretrained 22M, head_lr ×5)         combined : 0.4756  fast : 0.4525  slow : 0.6069  Bot AUROC : 0.4968
-  M5.5 R1  TimeSformer-Small (random 31M, head_lr ×1 eff.) combined : 0.4836  fast : 0.4547  slow : 0.6254  Bot AUROC : 0.7151
-  M5.5 R1.5 TimeSformer-Small (random 31M, head_lr ×5)     combined : 0.4616  fast : 0.4339  slow : 0.6226  Bot AUROC : 0.5940
+  M5.4 P2 main (K400-pretrained 22M, head_lr ×5)         combined : 0.4756  fast : 0.4525  slow : 0.6069  Bot AUROC : 0.4968
+  M5.5 R1  TimeSformer-Small (random 31M, head_lr ×1 eff.) combined : 0.4836  fast : 0.4547  slow : 0.6254  Bot AUROC : 0.7151  ← cited
+  M5.5 R1.5 TimeSformer-Small (random 31M, head_lr ×5)     combined : 0.4616  fast : 0.4339  slow : 0.6226  Bot AUROC : 0.5940  ← ablation
 
-  Δ R1.5 vs M5.4 P2  : combined −0.0140  fast −0.0186  slow +0.0157  Bot AUROC +0.0972
-  Δ R1.5 vs R1       : combined −0.0220  fast −0.0208  slow −0.0028  Bot AUROC −0.1211
+  Δ R1 vs M5.4 P2     : combined +0.0080  fast +0.0022  slow +0.0185  Bot AUROC +0.2183
+  Δ R1.5 vs R1        : combined −0.0220  fast −0.0208  slow −0.0028  Bot AUROC −0.1211
 
-Two findings carry through the matcher correction:
+The R1.5 ablation reveals that **head_lr ×5 is harmful on a
+from-scratch backbone**: applying it dropped combined macro_f1 by
+0.022 and collapsed Bot per-class F1 from 0.091 to 0.000 (Bot AUROC
+0.7151 → 0.594). Mechanism: with a randomly initialised backbone, both
+head and backbone are equally fresh; running the head at 5× LR makes
+it overshoot toward the majority-class decision boundary while the
+backbone is still learning basic features. The M5.4 Phase-2 head LR
+multiplier was justified for K400-pretrained backbones (slow backbone
+preserves pretraining; fast head learns the new classifier from
+scratch); the same intervention is **not transferable** to
+from-scratch baselines under a nominally-identical "fairness
+contract".
 
-1. **head_lr ×5 is harmful for from-scratch TimeSformer-Small.**
-   Applying it (R1 → R1.5) drops combined macro_f1 by 0.022 and
-   collapses Bot per-class F1 from 0.0909 to 0.0 (Bot AUROC 0.7151
-   → 0.5940). Mechanism: with a randomly initialised backbone, both
-   head and backbone are equally fresh; running the head at 5× LR
-   makes it overshoot toward the majority-class decision boundary
-   while the backbone is still learning basic features. The
-   M5.4 Phase-2 head LR multiplier was justified for K400-pretrained
-   backbones (slow backbone preserves pretraining; fast head learns
-   the new head from scratch); the same intervention is **not
-   transferable** to from-scratch baselines under the same nominal
-   "fairness contract".
-2. **Architectural representation still helps the slow stream.** Even
-   in R1.5 (matcher-corrected, head_lr ×5 active), TimeSformer-Small's
-   slow-only macro_f1 (0.6226) exceeds M5.4 P2's (0.6069) by +0.016,
-   and Bot AUROC stays above (0.5940 vs 0.4968, +0.097). Divided
-   space-time attention apparently captures longer-tempo patterns
-   slightly better than VideoMAE-Small's joint attention at this
-   data scale — a real but smaller effect than R1's pre-fix headline
-   suggested.
+This finding crystallises into the **M5.5 Path B contract**:
+``head_lr_multiplier`` is grouped by pretrained status. K400 backbones
+train with ×5 (M5.4 P2 recipe); random-init backbones train with ×1.
+R1's effective head_lr ×1 (under the matcher bug) IS therefore the
+correct fairness contract for from-scratch backbones, and R1's 0.4836
+is the cited TimeSformer-Small baseline number — **not superseded by
+R1.5**. R1.5 stays as the ablation supplementary that empirically
+validates the Path B grouping.
 
-The Round 1 commit (``bac6c67``) and its run directory
-(``outputs/run_20260502_232207/``) are preserved as a forensic
-record. The artefact-bundle README in
-``outputs/run_20260502_232207/m5_5_timesformer_small_eval/README.md``
-carries a SUPERSEDED banner pointing to R1.5; the R1 numbers must
-not be cited as baseline results.
+Architectural follow-on (preserved through R1 → R1.5):
+TimeSformer-Small's slow-only macro_f1 (0.6254 in R1, 0.6226 in R1.5)
+exceeds M5.4 P2 main's 0.6069 in both — divided space-time attention
+captures longer-tempo patterns slightly better than VideoMAE-Small's
+joint attention at this data scale. The Bot AUROC trajectory is the
+sharper signal: R1's 0.7151 is the highest Bot AUROC seen across all
+six rows in `m5_5_baselines.md`, and the only one above 0.7. The
+focal+α intervention works noticeably better when the backbone does
+not commit to the majority-class boundary as aggressively.
 
-These are Round 1.5 readings on a five-row table; the conclusion
-above is provisional until rounds 2-3 fill in I3D / R(2+1)D-18 /
-C3D-Small / ConvLSTM and the Kinetics-pretrained vs random columns
-are populated across the full suite.
+### M5.5 Round 1 deliverable + R1.5 ablation supplementary
 
-### M5.5 Round 1.5 deliverable
-
-  baseline       : TimeSformer-Small (random init, 30.8M params)
-  configuration  : focal gamma=2 + inverse_sqrt class reweighting + head LR ×5 (matcher-fixed; actually applies)
-  combined macro_f1 (noise-free, no_cycle eval) : 0.4616
-  fast-only macro_f1 : 0.4339
-  slow-only macro_f1 : 0.6226
+  cited baseline : TimeSformer-Small R1 (random init, 30.8M params)
+  configuration  : focal γ=2 + inverse_sqrt α + head LR ×1 effective (random-init Path B contract)
+  combined macro_f1 (noise-free, no_cycle eval) : 0.4836
+  fast-only macro_f1 : 0.4547
+  slow-only macro_f1 : 0.6254
+  Bot per-class AUROC: 0.7151
   budget         : 10 epochs, 48,530 grad steps, batch=32 / accum=1
   splits         : data/processed/cicids2017_dt100ms_v2/splits.parquet
-  ckpt           : outputs/run_20260503_121046/ckpt/best.pt
-  artefact       : outputs/run_20260503_121046/m5_5_timesformer_small_eval/
-  supersedes     : Round 1 (commit bac6c67, run_20260502_232207/) — preserved as forensic record
+  ckpt           : outputs/run_20260502_232207/ckpt/best.pt    (commit bac6c67)
+  artefact       : outputs/run_20260502_232207/m5_5_timesformer_small_eval/
+
+  ablation supp. : TimeSformer-Small R1.5 (same model, head_lr ×5 intentional)
+                 : combined 0.4616 / fast 0.4339 / slow 0.6226 / Bot AUROC 0.5940
+                 : ckpt outputs/run_20260503_121046/ckpt/best.pt    (commit 3187a67)
+                 : artefact outputs/run_20260503_121046/m5_5_timesformer_small_eval/
+                 : NOT a cited baseline; recorded as the empirical evidence
+                   that head_lr ×5 hurts from-scratch backbones (Δ vs R1
+                   combined −0.022, Bot AUROC −0.121). Anchors the Path B
+                   head_lr-by-pretrained-status grouping decision.
+
+Round 2 baselines (C3D-Small, ConvLSTM, I3D, R(2+1)D-18) are
+documented in `docs/m5_5_baselines.md` (consolidated 6-row table +
+13×6 per-class grand tables + 4-section findings + Methods draft).
 
 ## Reproduction
 
@@ -503,8 +526,10 @@ runs (each ``outputs/run_<ts>/`` directory is gitignored):
 - ``outputs/run_20260501_162117/m5_3_rerun/``
 - ``outputs/run_20260502_134735/m5_4_eval/``
 - ``outputs/run_20260502_184512/m5_4_phase2_eval/``
-- ``outputs/run_20260502_232207/m5_5_timesformer_small_eval/`` (SUPERSEDED — R1, head_lr×5 not actually applied; preserved forensic-only)
-- ``outputs/run_20260503_121046/m5_5_timesformer_small_eval/`` (R1.5, matcher-fixed)
+- ``outputs/run_20260502_232207/m5_5_timesformer_small_eval/`` (R1, **cited per Path B** — random-init head_lr ×1 effective; commit bac6c67)
+- ``outputs/run_20260503_121046/m5_5_timesformer_small_eval/`` (R1.5 ablation supplementary — head_lr ×5 intentional; commit 3187a67)
+- Round 2 baselines (4 bundles + 4 commits) are listed in
+  ``docs/m5_5_baselines.md`` §"Source artefacts".
 
 Each bundle contains ``eval_metrics.json`` (full payload), a
 ``confusion_matrix.json``, a ``per_class_table.csv`` for direct
