@@ -269,9 +269,20 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=training_cfg.gradient_checkpointing,
         )
+    if name == "r2plus1d_18":
+        from nid_video.models.r2plus1d_18_nid import R2Plus1D18ForNID
+        # R(2+1)D-18 inherits Kinetics-400 weights from torchvision.
+        # Per Path B (K400 pretrained group), trains with --head-lr-mul 5.0.
+        # ``--pretrained`` is interpreted as a boolean flag (same as I3D).
+        load_pretrained = bool(pretrained) and pretrained.lower() not in ("none", "false", "0", "")
+        return R2Plus1D18ForNID(
+            num_classes=n_classes,
+            pretrained=load_pretrained,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
     raise SystemExit(
-        f"--model {name!r} not yet implemented in M5.5 (Round 2+ adds "
-        f"r2plus1d_18)"
+        f"--model {name!r} not yet implemented in M5.5"
     )
 
 

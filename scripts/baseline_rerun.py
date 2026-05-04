@@ -152,9 +152,16 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=False,
         )
-    raise SystemExit(
-        f"--model {name!r} not yet implemented (Round 2+ adds r2plus1d_18)"
-    )
+    if name == "r2plus1d_18":
+        from nid_video.models.r2plus1d_18_nid import R2Plus1D18ForNID
+        # Same rationale as I3D: pretrained=False at re-eval time.
+        return R2Plus1D18ForNID(
+            num_classes=n_classes,
+            pretrained=False,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
+        )
+    raise SystemExit(f"--model {name!r} not yet implemented")
 
 
 def _load_weights(model: nn.Module, ckpt_path: Path, device: str) -> None:
