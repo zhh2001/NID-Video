@@ -125,6 +125,50 @@ def _build_optimizer(
     raise ValueError(f"unknown optimizer in TrainingConfig: {cfg.optimizer!r}")
 
 
+def _epoch_metrics_to_record(
+    metrics: dict,
+    class_names: Sequence[str] | None,
+) -> dict:
+    """Convert an Evaluator.evaluate() output dict to the per_epoch.json
+    ``combined`` record shape.
+
+    Evaluator returns a flat dict with separate ``per_class_f1`` /
+    ``per_class_precision`` / ``per_class_recall`` / ``per_class_auroc``
+    arrays (length num_classes) plus scalar ``accuracy`` / ``macro_f1``
+    / ``auroc_macro`` / ``n_samples``. The per_epoch.json schema groups
+    per-class numbers under a ``per_class`` dict keyed by class name,
+    each value being ``{"f1", "p", "r", "auroc"}``. Convert here so the
+    writer is agnostic to the evaluator internals.
+    """
+    f1 = metrics["per_class_f1"]
+    p = metrics["per_class_precision"]
+    r = metrics["per_class_recall"]
+    auroc = metrics["per_class_auroc"]
+    n_per = metrics["n_per_class"]
+    num_classes = len(f1)
+    if class_names is None or len(class_names) != num_classes:
+        names = [f"class_{i}" for i in range(num_classes)]
+    else:
+        names = list(class_names)
+    per_class = {
+        names[i]: {
+            "f1": float(f1[i]),
+            "p": float(p[i]),
+            "r": float(r[i]),
+            "auroc": float(auroc[i]),
+            "n": int(n_per[i]),
+        }
+        for i in range(num_classes)
+    }
+    return {
+        "n_samples": int(metrics["n_samples"]),
+        "accuracy": float(metrics["accuracy"]),
+        "macro_f1": float(metrics["macro_f1"]),
+        "auroc_macro": float(metrics["auroc_macro"]),
+        "per_class": per_class,
+    }
+
+
 class Trainer:
     """Minimal training loop for the M3 milestone — see module docstring."""
 
@@ -145,6 +189,9 @@ class Trainer:
         eval_every: int = 1,
         track_best_metric: str = "macro_f1",
         class_names: Sequence[str] | None = None,
+        write_metrics: bool = True,
+        collect_grad_norm: bool = False,
+        metrics_config: dict | None = None,
     ) -> None:
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -230,6 +277,26 @@ class Trainer:
         else:
             self.evaluator = None
 
+        # Per-step / per-epoch metrics writer (M5.10 forward instrumentation).
+        # Default-on so future runs always emit per_step.jsonl + per_epoch.json
+        # + confusion_per_epoch.npz under <run_dir>/metrics/. The smoke / CI
+        # path can pass write_metrics=False to skip; collect_grad_norm=False
+        # by default so per_step rows do not carry the field unless the
+        # caller explicitly opts in (M5.10 ablation will turn it on per-run).
+        if write_metrics:
+            from nid_video.trainer.metrics_writer import MetricsWriter
+            self.metrics_writer: MetricsWriter | None = MetricsWriter(
+                run_dir=self.run_dir,
+                config=metrics_config,
+                collect_grad_norm=bool(collect_grad_norm),
+            )
+            logger.info(
+                f"MetricsWriter wired: dir={self.metrics_writer.metrics_dir}, "
+                f"collect_grad_norm={self.metrics_writer.collect_grad_norm}"
+            )
+        else:
+            self.metrics_writer = None
+
         # Report the *configured* per-group LRs (i.e. the values used as
         # ``initial_lr`` by LambdaLR), not the live param_group["lr"] —
         # LambdaLR sets the live value to ``initial_lr × cosine_factor(0)``
@@ -300,6 +367,7 @@ class Trainer:
             # M4 task 4.5: eval + best-model selection BEFORE checkpoint save,
             # so the checkpoint can record the eval-determined best status.
             is_best = False
+            epoch_metrics: dict | None = None
             if self.evaluator is not None and (epoch + 1) % self.eval_every == 0:
                 metrics = self.evaluator.evaluate()
                 self.evaluator.pretty_print(metrics, class_names=self.class_names)
@@ -319,6 +387,24 @@ class Trainer:
                         f"new best {self.track_best_metric}={metric_val:.4f} "
                         f"at epoch {epoch}"
                     )
+                epoch_metrics = metrics
+
+            # M5.10 forward instrumentation: write per-epoch metrics + the
+            # epoch's val confusion matrix. The trainer's evaluator returns
+            # a single combined-eval dict (no scale_id partition), so we
+            # only fill ``metrics.combined`` here; the retrofit path
+            # (scripts/baseline_rerun.py --output-mode per_epoch_metrics)
+            # adds ``fast`` and ``slow`` by partitioning predictions
+            # post-hoc. Either shape is valid per the per_epoch.json schema.
+            if self.metrics_writer is not None and epoch_metrics is not None:
+                combined_record = _epoch_metrics_to_record(epoch_metrics, self.class_names)
+                self.metrics_writer.log_epoch(
+                    epoch=epoch,
+                    grad_steps=self.global_grad_step,
+                    wall_time_s=t_epoch,
+                    metrics={"combined": combined_record},
+                    confusion=epoch_metrics["confusion_matrix"],
+                )
 
             ckpt_path = self.ckpt_dir / f"epoch_{epoch}_step_{self.global_grad_step}.pt"
             self.save_checkpoint(ckpt_path, epoch)
@@ -334,6 +420,9 @@ class Trainer:
             if max_steps is not None and self.global_micro_step >= max_steps:
                 logger.info(f"--max-steps {max_steps} reached; stopping early")
                 break
+
+        if self.metrics_writer is not None:
+            self.metrics_writer.finalize()
 
         peak_mb = (
             torch.cuda.max_memory_allocated() / (1024 * 1024)
@@ -388,6 +477,7 @@ class Trainer:
             grad_norm: float | None = None
             do_step = (micro_idx + 1) % self.grad_accum == 0
             if do_step:
+                t_grad_step_start = time.perf_counter()
                 if self.scaler is not None:
                     self.scaler.unscale_(self.optimizer)
                 grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -406,6 +496,23 @@ class Trainer:
                 # anyway — bounded drift, acceptable in M4 baseline.
                 self.scheduler.step()
                 self.global_grad_step += 1
+
+                # M5.10 forward instrumentation: per-grad-step row in
+                # per_step.jsonl. lr is read from group[0] (backbone group)
+                # — the head group's LR is base × head_lr_multiplier and
+                # downstream analysis can recompute it from per_epoch.json
+                # config. wall_time_s is the optimizer-step duration only
+                # (forward/backward time is dominated by autograd and
+                # measured separately by the per-epoch timer).
+                if self.metrics_writer is not None:
+                    self.metrics_writer.log_step(
+                        step=self.global_grad_step,
+                        epoch=epoch,
+                        loss=raw_loss_val,
+                        lr=self.optimizer.param_groups[0]["lr"],
+                        wall_time_s=time.perf_counter() - t_grad_step_start,
+                        grad_norm=grad_norm,
+                    )
 
             self.global_micro_step += 1
 

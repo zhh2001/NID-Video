@@ -175,7 +175,53 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--export-safetensors", type=Path, default=None,
                    help="After training, export final model weights (only) to "
                         "this safetensors path for deployment.")
+    p.add_argument("--no-metrics", action="store_true",
+                   help="Disable the per-step / per-epoch MetricsWriter "
+                        "(M5.10 forward instrumentation). Default off — i.e. "
+                        "metrics ARE written to <run_dir>/metrics/. Pass this "
+                        "flag for smoke / CI runs that don't need the trace.")
+    p.add_argument("--collect-grad-norm", action="store_true",
+                   help="Append per-step grad_norm to per_step.jsonl. Default "
+                        "off — the field is omitted from the JSONL schema "
+                        "regardless of whether the trainer's clip_grad_norm_ "
+                        "computed a value. Turn on for ablation runs that "
+                        "need the gradient-norm trajectory.")
     return p.parse_args(argv)
+
+
+def _build_metrics_config_snapshot(
+    args, training_cfg, total_steps, pretrained,
+) -> dict:
+    """Build the config dict written into per_epoch.json for forensic
+    clarity. Tolerant of ``None`` fields (e.g. ``--loss-fn ce`` leaves
+    ``args.focal_gamma`` unset; ``--no-splits`` leaves splits_path
+    unset). Anything that ends up ``None`` simply lands as ``null`` in
+    the resulting JSON.
+    """
+    def _opt_float(v):
+        return float(v) if v is not None else None
+    def _opt_str(v):
+        return str(v) if v is not None else None
+    return {
+        "model": args.model,
+        "pretrained": pretrained,
+        "loss_fn": args.loss_fn,
+        "focal_gamma": _opt_float(args.focal_gamma),
+        "reweighting": args.reweighting,
+        "head_lr_multiplier": float(training_cfg.head_lr_multiplier),
+        "epoch_end_strategy": args.epoch_end_strategy,
+        "eval_strategy": args.eval_strategy,
+        "label_mode": args.label_mode,
+        "batch_size": int(training_cfg.batch_size),
+        "grad_accumulation": int(training_cfg.grad_accumulation),
+        "num_epochs": int(args.num_epochs) if args.num_epochs is not None else int(training_cfg.num_epochs),
+        "warmup_steps": int(args.warmup_steps),
+        "total_steps": int(total_steps) if total_steps is not None else None,
+        "splits_path": _opt_str(args.splits_path),
+        "shard_pattern_fast": args.shard_pattern_fast,
+        "shard_pattern_slow": args.shard_pattern_slow,
+        "mix_ratio": _opt_float(args.mix_ratio),
+    }
 
 
 def _validate_args(args: argparse.Namespace) -> None:
@@ -648,6 +694,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if training.reweighting == "inverse_sqrt":
         criterion = _build_reweighted_criterion(args, training, n_classes)
 
+    # Resolve class names from label_mode for per_epoch.json's
+    # per_class.<name> keys (otherwise the writer falls back to
+    # ``class_0..N``, which is correct but harder to read in
+    # downstream figure code).
+    from nid_video.data.labeling import ID_TO_LABEL, ID_TO_LABEL_COLLAPSED
+    if args.label_mode == "collapsed13":
+        _class_names = [ID_TO_LABEL_COLLAPSED[i] for i in range(13)]
+    else:
+        _class_names = [ID_TO_LABEL[i] for i in range(15)]
+
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -657,8 +713,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         warmup_steps=args.warmup_steps,
         total_steps=total_steps,
         val_loader=val_loader,
+        class_names=_class_names,
         num_classes=n_classes,
         track_best_metric=args.track_best,
+        write_metrics=not args.no_metrics,
+        collect_grad_norm=args.collect_grad_norm,
+        metrics_config=_build_metrics_config_snapshot(args, training, total_steps, pretrained),
     )
     if args.resume is not None:
         if not args.resume.is_file():
