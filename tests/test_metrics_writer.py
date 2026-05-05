@@ -196,6 +196,37 @@ def test_writer_confusion_npz_keys(tmp_path: Path) -> None:
         assert m[0, 0] == ep + 1
 
 
+def test_writer_retrofit_mode_skips_per_step(tmp_path: Path) -> None:
+    """``purpose="retrofit"`` (used by scripts/baseline_rerun.py
+    --ckpt-glob) does not touch per_step.jsonl. A prior
+    forward-instrumentation per_step.jsonl in the same metrics/ dir
+    must be preserved verbatim, and log_step calls must raise."""
+    run_dir = tmp_path / "run_retro"
+    metrics_dir = run_dir / "metrics"
+    metrics_dir.mkdir(parents=True)
+    # Plant a fake forward-instrumented per_step.jsonl from a prior run.
+    prior = '{"step":1,"epoch":0,"loss":2.5,"lr":1e-4,"wall_time_s":0.3}\n'
+    (metrics_dir / "per_step.jsonl").write_text(prior)
+
+    w = MetricsWriter(run_dir, purpose="retrofit")
+    # File untouched after construction.
+    assert (metrics_dir / "per_step.jsonl").read_text() == prior
+
+    # log_step in retrofit mode raises (BEFORE finalize, so the "closed"
+    # check doesn't shadow the "retrofit" check).
+    with pytest.raises(RuntimeError, match="retrofit"):
+        w.log_step(step=2, epoch=0, loss=1.0, lr=1e-4, wall_time_s=0.1)
+
+    # log_epoch + finalize work normally.
+    w.log_epoch(epoch=0, grad_steps=4853, wall_time_s=1237.0,
+                metrics={"combined": _mock_combined_metrics()},
+                confusion=_mock_confusion(fill=10))
+    w.finalize()
+
+    # Per-step file still untouched after the full retrofit cycle.
+    assert (metrics_dir / "per_step.jsonl").read_text() == prior
+
+
 def test_writer_finalize_idempotent(tmp_path: Path) -> None:
     """Repeated finalize() must not raise. log_step / log_epoch after
     finalize() must raise (closed-state contract)."""

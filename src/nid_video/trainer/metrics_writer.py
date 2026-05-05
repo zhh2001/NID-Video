@@ -72,6 +72,13 @@ class MetricsWriter:
         regardless. The flag does not affect grad_norm computation
         itself — that lives in the trainer (``clip_grad_norm_``
         already returns the value for free).
+      purpose: ``"forward"`` (default) for live training instrumentation
+        — truncates per_step.jsonl at construction so re-runs in the
+        same run_dir start fresh. ``"retrofit"`` for offline ckpt
+        re-evaluation — does NOT touch per_step.jsonl (which the
+        retrofit cannot reconstruct anyway), preserving any prior
+        forward-instrumented per-step trace. ``log_step`` raises in
+        retrofit mode.
     """
 
     def __init__(
@@ -79,7 +86,12 @@ class MetricsWriter:
         run_dir: Path,
         config: dict[str, Any] | None = None,
         collect_grad_norm: bool = False,
+        purpose: str = "forward",
     ) -> None:
+        if purpose not in ("forward", "retrofit"):
+            raise ValueError(
+                f"purpose must be 'forward' or 'retrofit'; got {purpose!r}"
+            )
         self.run_dir = Path(run_dir)
         self.metrics_dir = self.run_dir / "metrics"
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -87,16 +99,22 @@ class MetricsWriter:
         self.per_epoch_path = self.metrics_dir / "per_epoch.json"
         self.confusion_path = self.metrics_dir / "confusion_per_epoch.npz"
         self.collect_grad_norm = bool(collect_grad_norm)
+        self.purpose = purpose
 
         self._run_id = self.run_dir.name
         self._config = dict(config) if config is not None else {}
         self._epoch_records: list[dict[str, Any]] = []
         self._confusion_dict: dict[str, np.ndarray] = {}
 
-        # Truncate per_step.jsonl at construction so re-runs in the same
+        # Forward mode: truncate per_step.jsonl so re-runs in the same
         # run_dir don't append onto a stale trajectory; subsequent
         # log_step calls reopen in append mode.
-        self.per_step_path.write_text("")
+        # Retrofit mode: leave per_step.jsonl untouched — the retrofit
+        # path cannot reconstruct per-step training trace from
+        # checkpoints, so any prior forward-instrumented per_step.jsonl
+        # in this run_dir must be preserved.
+        if purpose == "forward":
+            self.per_step_path.write_text("")
 
         self._closed = False
 
@@ -120,6 +138,11 @@ class MetricsWriter:
         """
         if self._closed:
             raise RuntimeError("MetricsWriter is closed; call before finalize()")
+        if self.purpose == "retrofit":
+            raise RuntimeError(
+                "MetricsWriter is in retrofit mode; per-step data cannot be "
+                "reconstructed from checkpoints — call log_epoch only."
+            )
         row: dict[str, Any] = {
             "step": int(step),
             "epoch": int(epoch),

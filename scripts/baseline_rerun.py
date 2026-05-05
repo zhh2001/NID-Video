@@ -65,8 +65,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--config", type=Path, default=Path("configs/training_perf.yaml"))
-    p.add_argument("--resume", type=Path, required=True,
-                   help="Checkpoint produced by Trainer.save_checkpoint.")
+    p.add_argument("--resume", type=Path, default=None,
+                   help="Single-checkpoint mode: re-evaluate this ckpt under "
+                        "no_cycle and write the standard 4-piece artefact "
+                        "bundle (eval_metrics.json + per_class_table.csv + "
+                        "confusion_matrix.json + README.md) to --output-dir. "
+                        "Mutually exclusive with --ckpt-glob.")
+    p.add_argument("--ckpt-glob", type=str, default=None,
+                   help="Per-epoch retrofit mode: glob pattern matching "
+                        "Trainer-saved per-epoch checkpoints (e.g. "
+                        "'outputs/run_<ts>/ckpt/epoch_*_step_*.pt'). The "
+                        "script loads each ckpt, re-evaluates under "
+                        "no_cycle, and accumulates the per-epoch metrics + "
+                        "confusion matrix into <run_dir>/metrics/ in the "
+                        "MetricsWriter format (per_epoch.json + "
+                        "confusion_per_epoch.npz). best.pt is excluded "
+                        "by the glob pattern. Mutually exclusive with "
+                        "--resume.")
     p.add_argument("--shard-pattern-fast", type=str, required=True)
     p.add_argument("--shard-pattern-slow", type=str, required=True)
     p.add_argument("--splits-path", type=Path, required=True)
@@ -86,8 +101,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="Backbone selector — must match what the source training "
                         "run used. Default keeps the M3-onward main method; M5.5 "
                         "baselines override per-row.")
-    p.add_argument("--output-dir", type=Path, required=True,
-                   help="Directory to write metrics JSON / CSV / README into.")
+    p.add_argument("--output-dir", type=Path, default=None,
+                   help="Single-checkpoint mode: directory for the 4-piece "
+                        "artefact bundle (required when --resume is set). "
+                        "Per-epoch retrofit mode: ignored — output goes to "
+                        "<run_dir>/metrics/ derived from --ckpt-glob.")
     p.add_argument("--source-train-macro-f1", type=float, default=None,
                    help="Reference macro_f1 from the source training run "
                         "(e.g. the best-epoch eval reported in the source "
@@ -459,10 +477,228 @@ the fast stream.
 """
 
 
+def _epoch_step_from_ckpt_filename(p: Path) -> tuple[int, int]:
+    """Parse ``epoch_<N>_step_<S>.pt`` → (N, S). Raises on mismatch."""
+    import re
+    m = re.match(r"^epoch_(\d+)_step_(\d+)\.pt$", p.name)
+    if not m:
+        raise ValueError(
+            f"ckpt filename does not match epoch_<N>_step_<S>.pt: {p.name}"
+        )
+    return int(m.group(1)), int(m.group(2))
+
+
+def _compute_metrics_to_record_shape(
+    metrics: dict,
+    class_names: list[str],
+) -> dict:
+    """Convert the ``_compute_metrics`` output dict (per_class_* arrays
+    flat) to the per_epoch.json combined-record shape (per_class dict
+    keyed by class name, each value ``{f1, p, r, auroc, n}``).
+
+    Different from ``trainer._epoch_metrics_to_record`` only in that the
+    input here uses Python lists (``_compute_metrics`` returns
+    ``.tolist()``-converted values) rather than np arrays.
+    """
+    f1 = metrics["per_class_f1"]
+    p = metrics["per_class_precision"]
+    r = metrics["per_class_recall"]
+    auroc = metrics["per_class_auroc"]
+    n_per = metrics["n_per_class"]
+    num_classes = len(f1)
+    if len(class_names) != num_classes:
+        names = [f"class_{i}" for i in range(num_classes)]
+    else:
+        names = list(class_names)
+    per_class = {
+        names[i]: {
+            "f1": float(f1[i]),
+            "p": float(p[i]),
+            "r": float(r[i]),
+            "auroc": float(auroc[i]),
+            "n": int(n_per[i]),
+        }
+        for i in range(num_classes)
+    }
+    return {
+        "n_samples": int(metrics["n_samples"]),
+        "accuracy": float(metrics["accuracy"]),
+        "macro_f1": float(metrics["macro_f1"]),
+        "auroc_macro": float(metrics["auroc_macro"]),
+        "per_class": per_class,
+    }
+
+
+def _run_per_epoch_retrofit(args: argparse.Namespace) -> int:
+    """``--ckpt-glob`` mode: load each per-epoch ckpt in turn,
+    accumulate predictions on the no_cycle val loader, partition into
+    combined / fast / slow, and write to <run_dir>/metrics/ via
+    MetricsWriter(purpose="retrofit"). Per-step JSONL is intentionally
+    not produced — retrofit cannot reconstruct it from checkpoints.
+    """
+    import glob as _glob
+    import time
+    from nid_video.data.labeling import ID_TO_LABEL, ID_TO_LABEL_COLLAPSED
+    from nid_video.trainer.metrics_writer import MetricsWriter
+
+    matches = sorted(_glob.glob(args.ckpt_glob))
+    if not matches:
+        logger.error(f"--ckpt-glob matched zero paths: {args.ckpt_glob!r}")
+        return 2
+    ckpt_paths: list[Path] = []
+    for s in matches:
+        p = Path(s)
+        try:
+            _epoch_step_from_ckpt_filename(p)
+        except ValueError:
+            logger.warning(f"skipping non-epoch ckpt in glob: {p.name}")
+            continue
+        ckpt_paths.append(p)
+    if not ckpt_paths:
+        logger.error("no epoch_<N>_step_<S>.pt ckpts after filtering")
+        return 2
+    # Sort by epoch number (filename sort is good enough but be explicit).
+    ckpt_paths.sort(key=lambda p: _epoch_step_from_ckpt_filename(p)[0])
+
+    # Run dir = parent of ckpt dir = <run_dir>/ckpt/<file>.pt → <run_dir>.
+    run_dir = ckpt_paths[0].parent.parent
+    if not run_dir.is_dir():
+        logger.error(
+            f"derived run_dir from ckpt-glob does not exist: {run_dir}"
+        )
+        return 2
+    if not args.splits_path.is_file():
+        logger.error(f"--splits-path not found: {args.splits_path}")
+        return 2
+
+    logger.info(
+        f"retrofit: {len(ckpt_paths)} ckpt(s) under {run_dir} "
+        f"(model={args.model}, splits={args.splits_path.name})"
+    )
+
+    n_classes = label_num_classes(args.label_mode)
+    if args.label_mode == "collapsed13":
+        class_names = [ID_TO_LABEL_COLLAPSED[i] for i in range(13)]
+    else:
+        class_names = [ID_TO_LABEL[i] for i in range(15)]
+
+    model = _build_model(args, n_classes)
+
+    loader = build_multi_scale_dataloader(
+        fast_pattern=args.shard_pattern_fast,
+        slow_pattern=args.shard_pattern_slow,
+        batch_size=32,
+        num_workers=args.num_workers,
+        label_mode=args.label_mode,
+        shuffle_buffer=args.shuffle_buffer,
+        mix_ratio=args.mix_ratio,
+        splits_path=args.splits_path,
+        keep_split=args.keep_split,
+        epoch_end_strategy="no_cycle",
+        pin_memory=(args.device == "cuda"),
+    )
+
+    writer = MetricsWriter(
+        run_dir=run_dir,
+        config={
+            "retrofit_source": "scripts/baseline_rerun.py --ckpt-glob",
+            "model": args.model,
+            "label_mode": args.label_mode,
+            "eval_strategy": "no_cycle",
+            "splits_path": str(args.splits_path),
+            "shard_pattern_fast": args.shard_pattern_fast,
+            "shard_pattern_slow": args.shard_pattern_slow,
+            "mix_ratio": float(args.mix_ratio),
+            "ckpt_glob": args.ckpt_glob,
+            "ckpt_count": len(ckpt_paths),
+            "git_head": _git_head_short(),
+        },
+        purpose="retrofit",
+    )
+
+    for i, ckpt in enumerate(ckpt_paths):
+        epoch_idx, grad_steps = _epoch_step_from_ckpt_filename(ckpt)
+        logger.info(
+            f"[{i + 1}/{len(ckpt_paths)}] "
+            f"epoch={epoch_idx} grad_steps={grad_steps} ckpt={ckpt.name}"
+        )
+
+        t0 = time.perf_counter()
+        _load_weights(model, ckpt, args.device)
+        probs, preds, labels, scale_ids = _accumulate_predictions(
+            model, loader, args.device,
+        )
+        n_total = int(labels.numel())
+        n_fast = int((scale_ids == 0).sum().item())
+        n_slow = int((scale_ids == 1).sum().item())
+        logger.info(
+            f"  accumulated n={n_total} (fast={n_fast}, slow={n_slow})"
+        )
+
+        fast_mask = scale_ids == 0
+        slow_mask = scale_ids == 1
+        combined = _compute_metrics(probs, preds, labels, n_classes)
+        fast_only = _compute_metrics(
+            probs[fast_mask], preds[fast_mask], labels[fast_mask], n_classes,
+        )
+        slow_only = _compute_metrics(
+            probs[slow_mask], preds[slow_mask], labels[slow_mask], n_classes,
+        )
+
+        wall = time.perf_counter() - t0
+        logger.info(
+            f"  combined macro_f1={combined['macro_f1']:.4f} "
+            f"fast={fast_only['macro_f1']:.4f} "
+            f"slow={slow_only['macro_f1']:.4f}  ({wall:.1f}s)"
+        )
+
+        # confusion: combined-eval matrix (the same one written to
+        # eval_metrics.json by the single-eval path). _compute_metrics
+        # already converted to a Python nested list via .tolist();
+        # reshape back to ndarray for the writer.
+        confusion = np.asarray(combined["confusion_matrix"], dtype=np.int64)
+
+        epoch_metrics = {
+            "combined": _compute_metrics_to_record_shape(combined, class_names),
+            "fast": _compute_metrics_to_record_shape(fast_only, class_names),
+            "slow": _compute_metrics_to_record_shape(slow_only, class_names),
+        }
+        writer.log_epoch(
+            epoch=epoch_idx,
+            grad_steps=grad_steps,
+            wall_time_s=wall,
+            metrics=epoch_metrics,
+            confusion=confusion,
+        )
+
+    writer.finalize()
+    logger.info(
+        f"retrofit complete: {len(ckpt_paths)} epoch(s) → "
+        f"{writer.metrics_dir}/per_epoch.json + confusion_per_epoch.npz"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     setup_logger()
     args = parse_args(argv)
 
+    # Mode dispatch: --ckpt-glob (per-epoch retrofit) vs --resume
+    # (single-eval). Mutually exclusive.
+    if args.ckpt_glob and args.resume is not None:
+        logger.error("pass exactly one of --resume / --ckpt-glob, not both")
+        return 2
+    if not args.ckpt_glob and args.resume is None:
+        logger.error("must pass --resume <path> OR --ckpt-glob <pattern>")
+        return 2
+
+    if args.ckpt_glob:
+        return _run_per_epoch_retrofit(args)
+
+    # Single-eval mode (existing behaviour).
+    if args.output_dir is None:
+        logger.error("--resume mode requires --output-dir")
+        return 2
     if not args.resume.is_file():
         logger.error(f"--resume not found: {args.resume}")
         return 2
