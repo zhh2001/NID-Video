@@ -124,6 +124,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         "and ch6 packet-count-Δ). Must match the value used by "
                         "the source training run; mismatch produces a "
                         "patch_embed shape error on ckpt load.")
+    p.add_argument("--use-scale-token", type=lambda s: s.lower() == "true",
+                   default=None,
+                   help="Override the scale-token setting. M5.10 dim-4 "
+                        "ablation cells (B/C/D) use 'false'. Must match the "
+                        "value used by the source training run; mismatch "
+                        "produces a position_embedding shape error (257 vs "
+                        "256) on ckpt load.")
     return p.parse_args(argv)
 
 
@@ -137,6 +144,10 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
         cfg = cfg.model_copy(update={
             "data": cfg.data.model_copy(update={"num_channels": int(args.num_channels)})
         })
+    if args.use_scale_token is not None:
+        cfg = cfg.model_copy(update={
+            "model": cfg.model.model_copy(update={"use_scale_token": bool(args.use_scale_token)})
+        })
     name = args.model
     if name == "videomae_small":
         return VideoMAESmallForNID(
@@ -146,6 +157,7 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
             tube_patch=tuple(cfg.model.tube_patch),
             spatial_grid=(cfg.data.num_ip_buckets, cfg.data.num_port_buckets),
             gradient_checkpointing=False,
+            use_scale_token=cfg.model.use_scale_token,
         )
     if name == "timesformer_small":
         from nid_video.models.timesformer_small_nid import TimeSformerSmallForNID

@@ -160,6 +160,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         "value (production = 6). Pass 4 to drop ch5/ch6 "
                         "(direction Δ + packet count Δ) — leading channels "
                         "are sliced inside model.forward.")
+    p.add_argument("--use-scale-token", type=lambda s: s.lower() == "true",
+                   default=None,
+                   help="Override the scale-token setting (M5.10 dim-4 "
+                        "scale-token + multi-scale ablation). Default None → "
+                        "True (the project's main-method behaviour: prepend "
+                        "a CLS-like learnable token conditioned on scale_id, "
+                        "see Idea.md §3.4 / M4 task 4.2). Pass 'false' for "
+                        "the dim-4 ablation cells (B/C/D) which drop the "
+                        "token + use 256-pos pos_emb (vs 257-pos with token).")
     p.add_argument("--shuffle-buffer", type=int, default=1000)
     p.add_argument("--device", default="cuda")
     p.add_argument("--debug", action="store_true",
@@ -275,6 +284,7 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             tube_patch=tuple(cfg.model.tube_patch),
             spatial_grid=(cfg.data.num_ip_buckets, cfg.data.num_port_buckets),
             gradient_checkpointing=training_cfg.gradient_checkpointing,
+            use_scale_token=cfg.model.use_scale_token,
         )
     if name == "timesformer_small":
         from nid_video.models.timesformer_small_nid import TimeSformerSmallForNID
@@ -673,6 +683,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # DataConfig._channels_must_be_in_4_to_6 still fires.
         cfg = cfg.model_copy(update={
             "data": cfg.data.model_copy(update={"num_channels": int(args.num_channels)})
+        })
+    if args.use_scale_token is not None:
+        # M5.10 dim-4 scale-token ablation: override post-load.
+        cfg = cfg.model_copy(update={
+            "model": cfg.model.model_copy(update={"use_scale_token": bool(args.use_scale_token)})
         })
     training = cfg.training
     if args.debug:

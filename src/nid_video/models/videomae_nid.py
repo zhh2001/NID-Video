@@ -155,6 +155,7 @@ class VideoMAESmallForNID(nn.Module):
         spatial_grid: tuple[int, int] = (32, 64),
         gradient_checkpointing: bool = True,
         scale_init: ScaleInit = "zero",
+        use_scale_token: bool = True,
     ) -> None:
         super().__init__()
         if in_channels < 3:
@@ -165,6 +166,7 @@ class VideoMAESmallForNID(nn.Module):
         self.in_channels = in_channels
         self.tube_patch = tube_patch
         self.spatial_grid = spatial_grid
+        self.use_scale_token = use_scale_token
 
         self.backbone = _load_backbone_with_fallback(pretrained)
 
@@ -297,14 +299,19 @@ class VideoMAESmallForNID(nn.Module):
         # be the next thing to try.
         from transformers.models.videomae.modeling_videomae import get_sinusoid_encoding_table
 
-        n_pos = self.backbone.embeddings.num_patches + 1   # +1 for scale token
+        # M5.10 dim-4 scale-token ablation: when use_scale_token=False, build
+        # pos_emb at length num_patches (256) instead of num_patches+1 (257).
+        # The forward path skips the scale_token cat in this regime, so the
+        # position table must match the patch-only sequence length.
+        n_pos = self.backbone.embeddings.num_patches + (1 if self.use_scale_token else 0)
         hidden = self.backbone.config.hidden_size
         new_pe = get_sinusoid_encoding_table(n_pos, hidden)
         # In transformers VideoMAEEmbeddings, position_embeddings is a plain Tensor
         # attribute (not a Parameter, not a buffer). Direct assignment is correct
         # and matches upstream's __init__ convention.
         self.backbone.embeddings.position_embeddings = new_pe
-        logger.info(f"position_embedding rebuilt: shape={tuple(new_pe.shape)} (scale token + 256 patches)")
+        scale_label = "scale token + 256 patches" if self.use_scale_token else "256 patches (no scale token)"
+        logger.info(f"position_embedding rebuilt: shape={tuple(new_pe.shape)} ({scale_label})")
 
     # ----- forward -----
 
@@ -351,9 +358,16 @@ class VideoMAESmallForNID(nn.Module):
         pe_layer = self.backbone.embeddings.patch_embeddings
         embeddings = pe_layer(x)                                 # (B, 256, h)
 
-        scale_tok = self.scale_token.expand(B, -1, -1) + \
-            self.scale_embedding(scale_id).unsqueeze(1)          # (B, 1, h)
-        embeddings = torch.cat([scale_tok, embeddings], dim=1)   # (B, 257, h)
+        # M5.10 dim-4 scale-token ablation: when use_scale_token=False, skip
+        # the scale_token + scale_embedding cat. The scale_token /
+        # scale_embedding parameters still exist on self (built in __init__
+        # for ckpt-shape stability across hyperparam-sweep tooling) but are
+        # not used in this forward path. Position embedding is built with
+        # the matching length (256) in _adapt_position_embedding.
+        if self.use_scale_token:
+            scale_tok = self.scale_token.expand(B, -1, -1) + \
+                self.scale_embedding(scale_id).unsqueeze(1)      # (B, 1, h)
+            embeddings = torch.cat([scale_tok, embeddings], dim=1)  # (B, 257, h)
 
         # Position table is a plain tensor (not parameter/buffer); make sure
         # it lands on the embeddings' device/dtype before broadcasting.

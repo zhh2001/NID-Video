@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from torch import nn
 
 from nid_video.models.videomae_nid import (
     VideoMAESmallForNID,
@@ -463,3 +464,106 @@ def test_m3_state_dict_loads_with_strict_false_for_scale_params() -> None:
     assert "scale_token" in missing
     assert "scale_embedding.weight" in missing
     assert unexpected == []
+
+
+# ---------------------------------------------------------------------------
+# M5.10 dim-4 — scale-token + multi-scale ablation tests
+# ---------------------------------------------------------------------------
+
+
+def test_videomae_use_scale_token_false_pos_emb_is_256() -> None:
+    """M5.10 dim-4 ablation: when ``use_scale_token=False``, the position
+    embedding is built at length 256 (patches only) rather than 257 (patches
+    + scale token slot). The ablation cells (B/C/D) drop the token from the
+    forward pass; pos_emb shape must match."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            use_scale_token=False, gradient_checkpointing=False)
+    pe = m.backbone.embeddings.position_embeddings
+    assert pe.shape == (1, 256, 384), (
+        f"use_scale_token=False expected pos_emb (1, 256, 384); got {tuple(pe.shape)}"
+    )
+    # Default (use_scale_token=True) keeps the 257-pos main-method behaviour.
+    m_default = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                                    gradient_checkpointing=False)
+    pe_default = m_default.backbone.embeddings.position_embeddings
+    assert pe_default.shape == (1, 257, 384), (
+        f"default (use_scale_token=True) expected pos_emb (1, 257, 384); "
+        f"got {tuple(pe_default.shape)}"
+    )
+
+
+def test_videomae_forward_skips_scale_token_when_disabled() -> None:
+    """M5.10 dim-4 ablation: ``forward`` with ``use_scale_token=False`` must
+    pass exactly 256 tokens through the encoder (vs 257 with the token).
+    Verify by inspecting the encoder input shape via a forward hook on the
+    first transformer layer's input."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            use_scale_token=False, gradient_checkpointing=False)
+    m.eval()
+    captured = {}
+
+    def hook(module, inp, out):
+        # ``out[0]`` is the layer's hidden_states (B, N, h)
+        h = out[0] if isinstance(out, tuple) else out
+        captured["seq_len"] = h.shape[1]
+
+    handle = m.backbone.encoder.layer[0].register_forward_hook(hook)
+    try:
+        x = torch.randn(2, 16, 6, 32, 64)
+        scale_id = torch.zeros(2, dtype=torch.long)
+        with torch.no_grad():
+            m(x, scale_id=scale_id)
+    finally:
+        handle.remove()
+    assert captured["seq_len"] == 256, (
+        f"use_scale_token=False expected encoder seq_len=256; "
+        f"got {captured.get('seq_len')}"
+    )
+
+    # Sanity contrast: default model passes 257 tokens through.
+    m_default = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                                    gradient_checkpointing=False)
+    m_default.eval()
+    captured = {}
+    handle = m_default.backbone.encoder.layer[0].register_forward_hook(hook)
+    try:
+        with torch.no_grad():
+            m_default(x, scale_id=scale_id)
+    finally:
+        handle.remove()
+    assert captured["seq_len"] == 257, (
+        f"default (use_scale_token=True) expected encoder seq_len=257; "
+        f"got {captured.get('seq_len')}"
+    )
+
+
+def test_videomae_use_scale_token_false_keeps_scale_params_for_ckpt_compat() -> None:
+    """M5.10 dim-4 ablation: even when ``use_scale_token=False``, the
+    ``scale_token`` Parameter and ``scale_embedding`` module are still
+    constructed in __init__. The forward path skips them, but the
+    state_dict still carries them — this stabilises the on-disk ckpt
+    schema across hyperparam-sweep tooling and lets future tooling load
+    a use_scale_token=False ckpt with use_scale_token=True (after pos_emb
+    re-allocation), or vice versa."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            use_scale_token=False, gradient_checkpointing=False)
+    assert hasattr(m, "scale_token") and isinstance(m.scale_token, nn.Parameter)
+    assert hasattr(m, "scale_embedding")
+    assert m.scale_token.shape == (1, 1, 384)
+    assert m.scale_embedding.weight.shape == (2, 384)
+    # State dict carries them.
+    state = m.state_dict()
+    assert "scale_token" in state
+    assert "scale_embedding.weight" in state
+
+
+def test_model_config_use_scale_token_default_is_true() -> None:
+    """ModelConfig.use_scale_token defaults to True (main-method behaviour
+    per Idea.md §3.4 / M4 task 4.2). Ablation cells set False explicitly via
+    --use-scale-token CLI flag."""
+    from nid_video.utils.config import ModelConfig
+
+    cfg = ModelConfig()
+    assert cfg.use_scale_token is True
+    cfg_false = ModelConfig(use_scale_token=False)
+    assert cfg_false.use_scale_token is False

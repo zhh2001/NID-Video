@@ -58,6 +58,12 @@ class ModelConfig(BaseModel):
     backbone: Literal["videomae_small", "videomae_base"] = "videomae_small"
     pretrained: Literal["kinetics400", "ssv2", "none"] = "kinetics400"
     tube_patch: tuple[int, int, int] = (2, 8, 8)
+    # M5.10 dim-4 scale-token ablation. Default True = main-method behaviour
+    # (Idea.md §3.4 / M4 task 4.2: prepend a CLS-like learnable scale token
+    # conditioned on scale_id ∈ {0=fast, 1=slow}). Set False for the dim-4
+    # ablation cells (B/C/D), which drop the token and use a 256-pos sin-cos
+    # position table (vs 257-pos with the token).
+    use_scale_token: bool = True
 
 
 class TrainingConfig(BaseModel):
