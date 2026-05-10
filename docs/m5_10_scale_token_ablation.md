@@ -15,8 +15,8 @@ cells run under the M5.4 P2 fairness contract in a 2×2 factorial:
 |---|---|---|---|---:|---|
 | **A: main P2** | K400 | multi-scale 50/50 | on (use_scale_token=True) | ×5 | reused from M5.4 P2 retrofit (no re-train) |
 | **B: ms+notoken** | K400 | multi-scale 50/50 | **off** (use_scale_token=False) | ×5 | Phase 1 forward training (commit `5bc6b32`) |
-| **C: fast-only** | K400 | single-scale fast (Δt=100ms) | off | ×5 | **Phase 1 forward training — this commit** |
-| **D: slow-only** | K400 | single-scale slow (Δt=1s) | off | ×5 | Phase 1 forward training — planned |
+| **C: fast-only** | K400 | single-scale fast (Δt=100ms) | off | ×5 | Phase 1 forward training (commit `3d830af`) |
+| **D: slow-only** | K400 | single-scale slow (Δt=1s) | off | ×5 | **Phase 1 forward training — this commit** |
 
 Path B is preserved across all 4 cells: K400 + head_lr ×5. The
 splitting variables are the scale token (A vs B) and the dataloader
@@ -49,59 +49,114 @@ holding the no-token regime fixed.
   model sees only one stream during training, then is evaluated on
   the other stream too.
 
-## Three-cell summary table (Cell A + Cell B + Cell C)
-
-Cell D will be appended in its commit.
+## Four-cell summary table
 
 | Cell | Run dir | Params | scale token | streams | combined | fast | slow | Bot AUROC | Bot F1 | accuracy |
 |---|---|---:|---|---|---:|---:|---:|---:|---:|---:|
 | **A: main P2** | `outputs/run_20260502_184512/` | 22M | on | ms (50/50) | **0.4756** | 0.4525 | 0.6069 | 0.4968 | 0.0000 | 0.9560 |
 | **B: ms+notoken** | `outputs/run_20260510_154227/` | 22M | **off** | ms (50/50) | **0.4760** | 0.4555 | 0.5999 | 0.3224 | 0.0000 | 0.9528 |
 | **C: fast-only** | `outputs/run_20260510_183624/` | 22M | off | fast only | **0.4341** | 0.4604 | **0.2895** | **0.6715** | 0.0000 | 0.9408 |
+| **D: slow-only** | `outputs/run_20260510_201129/` | 22M | off | slow only | **0.2471** | **0.1683** | 0.5637 | **0.6931** | 0.0000 | 0.9160 |
 
 Numbers verbatim from each cell's eval bundle:
 - Cell A: `outputs/run_20260502_184512/m5_4_phase2_eval/eval_metrics.json`
 - Cell B: `outputs/run_20260510_154227/m5_10_b_videomae_eval/eval_metrics.json`
 - Cell C: `outputs/run_20260510_183624/m5_10_c_videomae_eval/eval_metrics.json`
+- Cell D: `outputs/run_20260510_201129/m5_10_d_videomae_eval/eval_metrics.json`
 
 val_sample_count_total = 18,156 (fast 16,463 + slow 1,693) bit-identical
-across all three cells. Cell C's slow stream is OOD-evaluated — the
-model trained only on fast (Δt=100ms) shards and is being asked to
-classify slow (Δt=1s) inputs at re-eval time.
+across all four cells. Cell C's slow stream is OOD-evaluated (model
+trained only on fast shards); Cell D's fast stream is OOD-evaluated
+(model trained only on slow shards). The combined macro_f1 for C and D
+includes the OOD half of the val set.
 
-## Pair-wise Δ (so far: A, B, C — D pending)
+## Pair-wise Δ (full 4-cell)
 
-| Metric | A (token on, ms) | B (token off, ms) | C (token off, fast only) | Δ B − A | Δ C − A | Δ C − B |
+### Headline metrics across all 6 pairs
+
+| Metric | Δ B − A | Δ C − A | Δ D − A | Δ C − B | Δ D − B | Δ D − C |
 |---|---:|---:|---:|---:|---:|---:|
-| combined macro_f1 | 0.4756 | 0.4760 | 0.4341 | +0.0004 | **−0.042** | **−0.042** |
-| fast macro_f1 | 0.4525 | 0.4555 | 0.4604 | +0.003 | **+0.008** | +0.005 |
-| slow macro_f1 (OOD for C) | 0.6069 | 0.5999 | 0.2895 | −0.007 | **−0.317** | **−0.310** |
-| Bot per-class AUROC | 0.4968 | 0.3224 | 0.6715 | −0.175 | **+0.175** | **+0.349** |
-| Bot per-class F1 | 0.0000 | 0.0000 | 0.0000 | 0 | 0 | 0 |
-| accuracy | 0.9560 | 0.9528 | 0.9408 | −0.003 | −0.015 | −0.012 |
+| combined macro_f1 | +0.0004 | **−0.042** | **−0.229** | **−0.042** | **−0.229** | **−0.187** |
+| fast macro_f1 | +0.003 | +0.008 | **−0.284** | +0.005 | **−0.287** | **−0.292** |
+| slow macro_f1 | −0.007 | **−0.317** | −0.043 | **−0.310** | −0.036 | **+0.274** |
+| Bot per-class AUROC | **−0.175** | **+0.175** | **+0.196** | **+0.349** | **+0.371** | +0.022 |
+| accuracy | −0.003 | −0.015 | −0.040 | −0.012 | −0.037 | −0.025 |
 
-Pair-wise interpretation:
+### 2×2 factorial isolation
+
+The 2×2 design isolates the **scale token** factor (A vs B) and the
+**multi-scale training** factor (B vs {C, D}) cleanly:
+
+| Factor | Δ on combined macro_f1 | Δ on Bot AUROC |
+|---|---:|---:|
+| **Scale token alone** (A vs B; multi-scale fixed) | **+0.0004** (null) | **+0.175** (token preserves Bot ranking) |
+| **Multi-scale training** (B vs C, no-token side) | **+0.042** | **−0.349** (multi-scale collapses Bot) |
+| **Multi-scale training** (B vs D, no-token side) | **+0.229** | **−0.371** (multi-scale collapses Bot harder vs slow-only) |
+
+**Joint interpretation**: The contribution-point-#4 lift (multi-scale
++ scale token vs single-stream + no-token) decomposes cleanly. The
+**scale token contributes ≈ 0** on combined macro_f1 — within
+rounding noise of the multi-scale-training side it is paired with.
+The **multi-scale training data** contributes the +0.042 (or +0.229
+vs slow-only) headline lift. The token's load-bearing role is
+elsewhere: it stabilises Bot rare-class AUROC ranking under the
+head_lr ×5 + multi-scale regime; without it, Bot AUROC collapses
+from 0.4968 (Cell A) to 0.3224 (Cell B).
+
+### OOD penalty pairs (single-stream → opposite-stream)
+
+| Cell | trained on | OOD eval on | OOD macro_f1 | in-distribution macro_f1 | OOD penalty |
+|---|---|---|---:|---:|---:|
+| C | fast (Δt=100ms) | slow (Δt=1s) | 0.2895 | 0.4604 | −0.171 |
+| D | slow (Δt=1s) | fast (Δt=100ms) | 0.1683 | 0.5637 | **−0.395** |
+
+**Asymmetric OOD penalty**: training on slow then evaluating on fast
+is a worse OOD jump than training on fast then evaluating on slow
+(Cell D −0.395 vs Cell C −0.171). The slow→fast direction is harder
+to bridge — plausibly because the slow Δt=1s frames have aggregated
+many more packets per bucket than fast Δt=100ms frames, and the
+model trained on aggregated representations cannot decompose them
+back to fine-grained per-100ms patterns. The fast→slow direction is
+easier because aggregated patterns are visible (with attenuation) in
+fine-grained frames too. Cell D's in-distribution macro_f1 0.5637
+also exceeds Cell C's 0.4604 — the slow stream's per-frame signal is
+more discriminative on its own, but it transfers worse.
+
+Pair-wise observations (recorded for round 1 closeout Findings;
+no Findings.md edits this round per spec):
 
 - **A vs B (scale token alone, holding multi-scale fixed)**: token
   contribution to combined is null (+0.0004); token preserves Bot
   AUROC (Δ −0.175 without token).
-- **A vs C (full main method vs fast-only no-token)**: combined drops
-  −0.042 — the multi-scale + token combination provides this margin.
-  Slow OOD penalty Δ −0.317 dominates the loss; fast actually gains
-  +0.008 (single-stream specialisation).
-- **B vs C (multi-scale-training contribution alone, no-token side)**:
-  same combined Δ −0.042 and same slow OOD Δ −0.310. Holding the
-  no-token regime fixed, multi-scale training is worth +0.042 on
-  combined macro_f1.
-- **C vs A on Bot AUROC** (+0.175): striking surprise — fast-only
-  training preserves Bot rare-class ranking BETTER than multi-scale
-  + token. Combined with the dim 1 random cell's 0.6743 Bot AUROC
-  (similar magnitude), this points to **non-aggressive optimisation
-  regimes** (head_lr ×1, OR fast-only single-stream + head_lr ×5)
-  preserving Bot ranking, while multi-scale + head_lr ×5 collapses it.
-  Cell B's Bot AUROC 0.3224 — the worst across all M5.10 round 1
-  cells — suggests the COMBINATION of multi-scale training + no token
-  + head_lr ×5 is the malicious regime.
+- **A vs C / A vs D (full main method vs single-stream)**: combined
+  drops −0.042 / −0.229; the multi-scale + token combination provides
+  this margin. Slow OOD penalty (Cell C) and fast OOD penalty
+  (Cell D) drive the loss; in-distribution macro_f1 is comparable to
+  or higher than Cell A's stream-specific number in both cases.
+- **B vs C / B vs D (multi-scale training alone, no-token side)**:
+  same combined Δ −0.042 / −0.229 and same OOD penalties. Holding
+  the no-token regime fixed, multi-scale training is worth +0.042
+  to +0.229 on combined macro_f1 (depending on which single-stream
+  baseline). The narrative shorthand "multi-scale training data is
+  the contribution-point-#4 lift" holds at this magnitude.
+- **Bot AUROC ranking across cells**: D (0.6931) > C (0.6715) >
+  A (0.4968) > B (0.3224). The pattern is now clear: head_lr ×5 +
+  multi-scale + no-token (Cell B) is the worst regime for Bot rare-
+  class ranking; both single-stream cells preserve it (best);
+  scale token recovers some of the multi-scale-induced collapse
+  (Cell A 0.4968, between B and the single-stream pair). This
+  refines M5-007: head_lr ×5 by itself does NOT collapse Bot —
+  head_lr ×5 + multi-scale training does. The scale token mitigates
+  but does not fully eliminate the multi-scale collapse.
+- **Cell D fast OOD Bot AUROC = 0.8056** (highest in dim 4): a
+  surprising result — Cell D's model never saw fast during training,
+  yet ranks Bot on fast better than any cell that did see fast. The
+  Bot signature appears to be a stable beaconing-rate pattern that's
+  visible at any temporal granularity; training on slow's aggregated
+  view leaves the binary discrimination boundary cleaner than training
+  on fast's fine-grained noise. (Note: Bot F1 = 0 across all cells —
+  the AUROC discrimination doesn't translate to a usable threshold
+  under focal+α reweighting at n=12 support.)
 
 **Two-cell observations** (recorded for round 1 closeout Findings;
 no Findings.md edits this round per spec):
@@ -284,6 +339,155 @@ closeout Findings batch):
   different (more aggregated traffic per bucket) and the K400-pretrained
   + fast-only-fine-tuned model cannot bridge that gap.
 
+## Cell D per-class table (combined eval, epoch 8 best.pt)
+
+| class | n | P | R | F1 | AUROC |
+|---|---:|---:|---:|---:|---:|
+| BENIGN | 16,829 | 0.9414 | 0.9738 | 0.9573 | 0.8175 |
+| DoS Hulk | 105 | 0.4925 | 0.3143 | 0.3837 | 0.8802 |
+| PortScan | 22 | 0.3333 | 0.1364 | 0.1935 | 0.9410 |
+| DDoS | 228 | 0.4634 | 0.0833 | 0.1413 | 0.9670 |
+| DoS GoldenEye | 61 | 0.0000 | 0.0000 | 0.0000 | 0.7693 |
+| FTP-Patator | 107 | 0.1868 | 0.1589 | 0.1717 | 0.8888 |
+| SSH-Patator | 175 | 0.1688 | 0.3829 | 0.2343 | 0.9260 |
+| DoS slowloris | 264 | 0.8229 | 0.2992 | 0.4389 | 0.8999 |
+| DoS Slowhttptest | 105 | 0.2000 | 0.0190 | 0.0348 | 0.8385 |
+| Bot | 12 | 0.0000 | 0.0000 | 0.0000 | **0.6931** |
+| Web Attack | 0 | — | — | — | — |
+| Infiltration | 0 | — | — | — | — |
+| Heartbleed | 248 | 1.0000 | 0.0887 | 0.1630 | 0.9630 |
+
+## Cell D per-epoch trajectory (in-training slow-only eval, n=1,693)
+
+| epoch | macro_f1 | Bot AUROC | Bot F1 | GoldenEye F1 | DDoS F1 |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 0.2652 | 0.5070 | 0.0000 | 0.0000 | 0.0000 |
+| 1 | 0.4744 | 0.4667 | 0.0000 | 0.0000 | 0.9545 |
+| 2 | 0.4828 | 0.5127 | 0.0000 | 0.0000 | 0.9362 |
+| 3 | 0.4817 | 0.5863 | 0.0000 | 0.0000 | 0.8837 |
+| 4 | 0.5300 | 0.6502 | 0.0000 | 0.0000 | 0.9333 |
+| 5 | 0.5383 | 0.6721 | 0.0000 | 0.0000 | 0.9778 |
+| 6 | 0.5471 | 0.7108 | 0.0000 | 0.0000 | 0.9767 |
+| 7 | 0.5095 | 0.6926 | 0.0000 | 0.0000 | 0.9362 |
+| 8 | **0.5637** | 0.6643 | 0.0000 | 0.0000 | 0.9048 |
+| 9 | 0.5543 | 0.6950 | 0.0000 | 0.0000 | 0.9362 |
+
+`best.pt = epoch_8_step_2178.pt` — epoch 8 slow-only macro_f1 was the
+high-water-mark; epoch 9 regressed slightly (Δ −0.009, normal late-
+cosine-decay noise). Trajectory has 3 dips (epoch 2→3, 6→7, 8→9), max
+dip 0.038. Cell D's slow-only training reaches a higher
+in-distribution macro_f1 (0.5637) than Cell C's fast-only training
+reaches on its in-distribution (0.4604) — the slow stream's coarser
+temporal aggregation may carry more discriminative signal per frame.
+
+Cell D in-training slow-only macro_f1 = 0.563750 (best at epoch 8)
+matches the noise-free re-eval slow_only_metrics.macro_f1 = 0.563750
+**bit-identically** (Δ = 0.000000). The combined and fast OOD numbers
+are NEW at re-eval time; see the four-cell summary table.
+
+Notable Cell D trajectory features (open-ended; recorded for round 1
+closeout Findings batch):
+
+- **Bot AUROC monotone CLIMB** (with one small mid-trajectory dip):
+  0.5070 (epoch 0) → 0.6950 (epoch 9). Same direction-of-effect as
+  Cell C and opposite to Cell A/B. Single-stream training (either
+  fast OR slow) under K400 + ×5 preserves Bot rare-class ranking,
+  while multi-scale training collapses it.
+- **DDoS F1 jumps to 0.95+ at epoch 1**: 0 / 0.9545 / 0.9362 / 0.8837
+  / 0.9333 / 0.9778 / 0.9767 / 0.9362 / 0.9048 / 0.9362. The slow
+  stream has an extremely clean DDoS signature visible from the very
+  first epoch — far cleaner than fast (Cell C's DDoS F1 stayed 0
+  through epoch 6 and only reached 0.5121 by epoch 9). Slow
+  Δt=1s windows aggregate enough packets that DDoS pattern
+  recognition is essentially saturated within 1 epoch.
+- **GoldenEye F1 = 0 across all 10 epochs**: Cell D never predicts
+  GoldenEye correctly during training. The slow stream may have very
+  few GoldenEye train samples, OR the GoldenEye temporal signature
+  requires fine-grained Δt=100ms observation. Compare to Cell C
+  (fast-only) which reached GoldenEye F1 0.42 by epoch 9. The slow→
+  fast OOD penalty for GoldenEye is structural — without per-frame
+  temporal resolution, GoldenEye is invisible to Cell D.
+- **Combined macro_f1 trajectory has 3 dips** (0.4828 → 0.4817 −0.001;
+  0.5471 → 0.5095 −0.038; 0.5637 → 0.5543 −0.009). Max dip 0.038
+  comparable to Cell B's 0.044 and dim 1 random's 0.038; smaller than
+  the deepest dim-2 dips. Cell D dips occur on a small val_n=1,693
+  baseline, so per-epoch noise has higher relative magnitude.
+
+## Cell D sanity verification
+
+- **val_sample_count_total**: in-training slow-only val_n = 1,693 in
+  all 10 epochs ✓ (single-scale training path, model only sees slow
+  shards). Noise-free re-eval double-stream val_n = 18,156 ✓.
+- **In-training vs noise-free re-eval slow-only sub-metric** (best
+  ckpt = epoch 8): in-training slow-only macro_f1 = 0.563750;
+  noise-free re-eval slow_only_metrics.macro_f1 = 0.563750; **Δ =
+  0.000000** (bit-identical, within ≤ 5e-5 fairness contract).
+  Combined and fast noise-free numbers are new at re-eval time and
+  have no in-training counterpart (Cell D trained slow-only, the
+  fast stream is OOD); per the spec, this is expected for the
+  single-stream-train + double-stream-eval ablation cell, not a
+  Δ-sanity violation.
+- **Wall time**: 539.6 s ≈ 9.0 min (10 epochs × ~36-41 s/epoch on
+  the 8 GB box, peak GPU 426 MB throughout). Slow-stream-only training
+  is ~1.5× faster wall-clock than Cell C's 81.6 min and ~17× faster
+  than Cell B's 154 min because grad_steps/epoch ≈ 242 (vs Cell C's
+  2,426 vs Cell B's 4,853). Total grad_steps = 2,420 (one tenth of
+  Cell C, one twentieth of Cell B). Slow train_n = 7,752 — the
+  smallest training set in the dim-4 suite.
+- **per_step.jsonl**: 2,420 rows (1 per grad step, full schedule
+  completed). Each row carries `grad_norm` field via
+  `--collect-grad-norm`. Standard fp16 GradScaler dynamic-loss-scaling
+  startup Inf pattern in the first few steps; remainder all finite.
+- **per_epoch.json**: 10 epoch records with `metrics.combined.{macro_f1,
+  accuracy, auroc_macro, per_class}` populated; "combined" here =
+  single-stream slow-only (the trainer naming convention; the noise-
+  free re-eval applies the multi-stream split).
+- **confusion_per_epoch.npz**: 10 keys `epoch_0..epoch_9`, each
+  (13, 13) int64, every sum = 1,693 ✓ (slow-only val_n).
+- **K400 source verified**: trainer log records `loaded pretrained
+  backbone: MCG-NJU/videomae-small-finetuned-kinetics` and the
+  patch_embed adapter log shows `ch[0:3] downsampled 16→8
+  shape=(384, 3, 2, 8, 8) norm=5.24` — same K400 source as Cells A/B/C.
+- **Single-stream slow dataloader**: trainer log shows `NidShardDataset:
+  12 url(s), label_mode=collapsed13, shuffle_buffer=1000,
+  keep_split=train` — 12 shards from the slow Δt=1s set; vs Cell B's
+  `MultiScaleNidDataset: ... mix_ratio=0.5 ...` covering 113 fast +
+  12 slow shards. Cell D is single-stream by trainer dispatch,
+  scale_id passed as all-zeros (irrelevant — token off).
+- **Two-dir consolidation**: tee `outputs/run_20260510_201036/`
+  consolidated into Trainer-internal `outputs/run_20260510_201129/`
+  and rmdir'd. Same pattern as Cells B/C + dim 2 + dim 1 SSv2.
+
+## Cross-dimension cross-validation (round 1 dim 1 + dim 2 + dim 4)
+
+Recorded for round 1 closeout Findings batch (no Findings.md edits this
+round per spec). The Bot AUROC pattern across all 8 forward-trained
+cells in M5.10 round 1 lets us re-state the M5-007 finding:
+
+| Cell | dim | regime | head_lr | Bot AUROC |
+|---|---|---|---:|---:|
+| dim 1 random | 1 | none + ms | ×1 | **0.6743** |
+| dim 1 SSv2 | 1 | SSv2 + ms | ×5 | 0.4115 |
+| dim 2 C=4 | 2 | K400 + ms (4ch) | ×5 | 0.5233 |
+| **A: main P2** | (anchor) | K400 + ms + token | ×5 | 0.4968 |
+| **B: ms+notoken** | 4 | K400 + ms − token | ×5 | **0.3224** |
+| **C: fast-only** | 4 | K400 + fast only − token | ×5 | **0.6715** |
+| **D: slow-only** | 4 | K400 + slow only − token | ×5 | **0.6931** |
+
+The splitting variable for Bot AUROC preservation is now **(head_lr
+×5) ∧ (multi-scale training)** = the malicious regime that collapses
+Bot ranking. Removing either factor (×1 in dim 1 random; single-stream
+in dim 4 C/D) preserves Bot ≥ 0.67. The scale token (dim 4 A vs B)
+provides a partial mitigation when both malicious factors are present:
+0.4968 with token vs 0.3224 without. Pretrained source (dim 1
+K400 vs SSv2) and channel count (dim 2 C=4 vs C=6) are second-order
+modulators within the malicious regime, not splitting variables.
+
+This refines M5-007 from "head_lr ×5 collapses Bot AUROC" to:
+**"head_lr ×5 collapses Bot AUROC under multi-scale training; the
+scale token mitigates partially; single-stream training preserves
+Bot."**
+
 ## Cell B sanity verification
 
 - **val_sample_count_total = 18,156** in all 10 epochs ✓
@@ -443,8 +647,8 @@ all forward token count verified correct):
 |---|---|---|---|
 | A: main P2 | `outputs/run_20260502_184512/` | `m5_4_phase2_eval/` | `1d1a61e` (M5.4 P2) |
 | B: ms+notoken | `outputs/run_20260510_154227/` | `m5_10_b_videomae_eval/` | `5bc6b32` (Phase 0 + Cell B) |
-| C: fast-only | `outputs/run_20260510_183624/` | `m5_10_c_videomae_eval/` (this commit) | (this commit) |
-| D: slow-only | (planned) | (planned) | (planned) |
+| C: fast-only | `outputs/run_20260510_183624/` | `m5_10_c_videomae_eval/` | `3d830af` (Cell C) |
+| D: slow-only | `outputs/run_20260510_201129/` | `m5_10_d_videomae_eval/` (this commit) | (this commit) |
 
 `outputs/**` is gitignored so artefacts ship locally only; recreate
 the Cell B run via:
@@ -514,6 +718,34 @@ uv run python scripts/baseline_rerun.py \
     --splits-path data/processed/cicids2017_dt100ms_v2/splits.parquet \
     --output-dir outputs/run_20260510_183624/m5_10_c_videomae_eval/ \
     --task-label "M5.10 round 1 dim 4 cell C — VideoMAE-S K400 head_lr ×5 fast-only single-stream no-token"
+```
+
+Recreate the Cell D run via:
+
+```bash
+uv run python scripts/train.py \
+    --shard-pattern "data/processed/cicids2017_dt1000ms_v2/*/shards/shard-*.tar" \
+    --splits-path data/processed/cicids2017_dt100ms_v2/splits.parquet \
+    --pretrained MCG-NJU/videomae-small-finetuned-kinetics \
+    --head-lr-multiplier 5.0 \
+    --use-scale-token false \
+    --num-epochs 10 \
+    --loss-fn focal --focal-gamma 2.0 --reweighting inverse_sqrt \
+    --eval-strategy no_cycle --label-mode collapsed13 \
+    --collect-grad-norm
+```
+
+Recreate the Cell D noise-free re-eval (double-stream OOD on fast):
+
+```bash
+uv run python scripts/baseline_rerun.py \
+    --resume outputs/run_20260510_201129/ckpt/best.pt \
+    --use-scale-token false \
+    --shard-pattern-fast "data/processed/cicids2017_dt100ms_v2/*/shards/shard-*.tar" \
+    --shard-pattern-slow "data/processed/cicids2017_dt1000ms_v2/*/shards/shard-*.tar" \
+    --splits-path data/processed/cicids2017_dt100ms_v2/splits.parquet \
+    --output-dir outputs/run_20260510_201129/m5_10_d_videomae_eval/ \
+    --task-label "M5.10 round 1 dim 4 cell D — VideoMAE-S K400 head_lr ×5 slow-only single-stream no-token"
 ```
 
 ## Findings + Methods draft
