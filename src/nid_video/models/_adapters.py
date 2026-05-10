@@ -95,6 +95,41 @@ def adapt_conv3d_to_6ch(
     return new_conv
 
 
+def adapt_conv3d_to_4ch(
+    conv3d: nn.Conv3d,
+    target_kernel: tuple[int, int, int],
+    target_stride: tuple[int, int, int] | None = None,
+) -> nn.Conv3d:
+    """Build a new ``Conv3d(4, out_ch, ...)`` for the M5.10 dim-2 motion-
+    channel ablation: trilinear-downsample the source 3-channel kernel
+    from its native ``(T, H, W)`` to ``target_kernel`` for ch[0:3] and
+    Kaiming-init a single extra channel for ch4 (the project's
+    bit-packed TCP-flag mask, ch1-4 static-only — see Idea.md §3.2).
+
+    This is a thin convenience wrapper over ``adapt_conv3d_to_6ch``
+    with ``n_extra=1``; named separately so call sites read as
+    "C=4 adapter" rather than "to_6ch adapter passed n_extra=1".
+
+    Regime note: in the project's VideoMAE-S setup the K400 source
+    kernel is (2, 16, 16) and the project's target tube_patch is
+    (2, 8, 8) — i.e. this is the M3-001 norm-ratio downsample regime,
+    not the I3D / R(2+1)D-18 identity-kernel regime. The bit-identity
+    sanity in tests therefore compares C=4 vs C=6 cells produced from
+    the *same* source ckpt + the *same* downsample (ch[0:3] of both
+    cells must match byte-for-byte), rather than asserting the
+    returned conv equals the un-downsampled source weights.
+
+    Args:
+      conv3d: pretrained source. ``conv3d.weight`` shape
+        ``(out_ch, 3, T_orig, H_orig, W_orig)``.
+      target_kernel: ``(T_p, H_p, W_p)`` of the new conv.
+      target_stride: same as kernel by default.
+    """
+    return adapt_conv3d_to_6ch(
+        conv3d, target_kernel, target_stride=target_stride, n_extra=1,
+    )
+
+
 def adapt_conv2d_to_6ch(
     conv2d: nn.Conv2d,
     target_kernel: tuple[int, int],

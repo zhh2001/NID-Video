@@ -29,12 +29,23 @@ class DataConfig(BaseModel):
 
     @field_validator("num_channels")
     @classmethod
-    def _channels_must_be_six(cls, v: int) -> int:
-        # Idea.md §3.2 fixes the 6-channel design. Surface a clear error
-        # if the YAML drifts from that contract.
-        if v != 6:
+    def _channels_must_be_in_4_to_6(cls, v: int) -> int:
+        """Production default 6; M5.10 dim-2 motion-channel ablation
+        allows 4-6 with a warning. Values outside the 4-6 band are
+        rejected — Idea.md §3.2 fixes the channel contract.
+        """
+        if not (4 <= v <= 6):
             raise ValueError(
-                "num_channels must stay at 6 — see Idea.md §3.2 for channel semantics"
+                f"num_channels must be in [4, 6]; got {v}. "
+                "Production default is 6 (Idea.md §3.2); ablation cells "
+                "may set 4 (M5.10 dim-2 motion-channel ablation: drops "
+                "ch5 direction-Δ and ch6 packet-count-Δ)."
+            )
+        if v != 6:
+            import logging
+            logging.warning(
+                f"num_channels={v} is the M5.10 dim-2 motion-channel ablation cell; "
+                f"default 6 per Idea.md §3.2 (ch5 = direction Δ, ch6 = packet count Δ)"
             )
         return v
 

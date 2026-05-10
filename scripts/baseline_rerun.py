@@ -118,6 +118,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="Path printed in the README's reproduction block. "
                         "Override only when this script is invoked through a "
                         "thin wrapper that has a different on-disk name.")
+    p.add_argument("--num-channels", type=int, default=None,
+                   help="Override data.num_channels from config. M5.10 dim-2 "
+                        "motion-channel ablation uses 4 (drops ch5 direction-Δ "
+                        "and ch6 packet-count-Δ). Must match the value used by "
+                        "the source training run; mismatch produces a "
+                        "patch_embed shape error on ckpt load.")
     return p.parse_args(argv)
 
 
@@ -127,6 +133,10 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
     same architectural keys the trainer wrote.
     """
     cfg = load_config(args.config)
+    if args.num_channels is not None:
+        cfg = cfg.model_copy(update={
+            "data": cfg.data.model_copy(update={"num_channels": int(args.num_channels)})
+        })
     name = args.model
     if name == "videomae_small":
         return VideoMAESmallForNID(

@@ -331,6 +331,22 @@ class VideoMAESmallForNID(nn.Module):
         prepend the scale token before the position embedding addition.
         Equivalent to ``backbone(x)`` minus the scale-token concat.
         """
+        # M5.10 dim-2 motion-channel ablation: the dataloader emits a
+        # 6-channel tensor (project default); a model built with
+        # in_channels < 6 (the C=4 ablation cell) slices the leading
+        # in_channels channels here. Assert >= rather than == to fail
+        # loudly on shape drift (M5-006 prefix-matcher bug lesson:
+        # silent shape mismatches are silent-failure risk points).
+        assert x.size(2) >= self.in_channels, (
+            f"input has {x.size(2)} channels, model expects ≥ {self.in_channels}; "
+            "M5.10 dim-2 ablation tolerates dataloader > model channels but not <"
+        )
+        if x.size(2) > self.in_channels:
+            x = x[:, :, :self.in_channels]
+        logger.debug(
+            f"videomae forward: x.shape={tuple(x.shape)} (in_channels={self.in_channels})"
+        )
+
         B = x.size(0)
         pe_layer = self.backbone.embeddings.patch_embeddings
         embeddings = pe_layer(x)                                 # (B, 256, h)

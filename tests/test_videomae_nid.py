@@ -294,6 +294,162 @@ def test_forward_with_mixed_scale_ids_in_a_batch() -> None:
     assert m.scale_embedding.weight.grad.abs().sum(dim=1).gt(0).all().item()
 
 
+def test_videomae_forward_slices_six_channel_input_to_four() -> None:
+    """C=4 ablation cell: model built with in_channels=4 receives a
+    6-channel tensor from the dataloader and slices the leading 4
+    channels in forward. Pin: same logits as if the slice were done
+    by the caller before forward (slice is in dim 2, leading channels
+    only)."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            in_channels=4, gradient_checkpointing=False)
+    m.eval()
+    torch.manual_seed(0)
+    x6 = torch.randn(2, 16, 6, 32, 64)
+    x4 = x6[:, :, :4]                              # leading 4 channels
+    scale_id = torch.zeros(2, dtype=torch.long)
+    with torch.no_grad():
+        out6 = m(x6, scale_id=scale_id)            # internal slice
+        out4 = m(x4, scale_id=scale_id)            # pre-sliced
+    torch.testing.assert_close(
+        out6["logits"], out4["logits"], atol=1e-7, rtol=0.0,
+    )
+
+
+def test_videomae_forward_assert_on_too_few_channels() -> None:
+    """Slicing tolerates dataloader > model channels but NOT
+    dataloader < model channels (would be a shape-drift silent
+    failure). Pass a 3-channel tensor to a 4-channel model; assert
+    must fire with a helpful message."""
+    m = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                            in_channels=4, gradient_checkpointing=False)
+    m.eval()
+    x3 = torch.randn(2, 16, 3, 32, 64)             # too few channels
+    scale_id = torch.zeros(2, dtype=torch.long)
+    with pytest.raises(AssertionError, match="expects ≥ 4"):
+        with torch.no_grad():
+            m(x3, scale_id=scale_id)
+
+
+def test_data_config_num_channels_validator_accepts_four_to_six() -> None:
+    """M5.10 dim-2 ablation: DataConfig.num_channels validator accepts
+    4, 5, 6 (with a warning at v != 6); rejects values outside [4, 6].
+    """
+    from nid_video.utils.config import DataConfig
+
+    # Accept 4-6 (with warning emitted to logging at v != 6 — the warning
+    # is emitted via stdlib `logging.warning`; we don't capture it here,
+    # just verify no exception).
+    for v in (4, 5, 6):
+        cfg = DataConfig(
+            raw_pcap_dir="dummy", processed_dir="dummy",
+            num_channels=v,
+        )
+        assert cfg.num_channels == v
+
+    # Reject below 4 (3 was never supported on the project's 6-channel
+    # dataloader; the ablation band is 4-6, not 1-6).
+    with pytest.raises(ValueError, match=r"num_channels must be in \[4, 6\]"):
+        DataConfig(raw_pcap_dir="dummy", processed_dir="dummy", num_channels=3)
+
+    # Reject above 6 (production default; no use case for >6).
+    with pytest.raises(ValueError, match=r"num_channels must be in \[4, 6\]"):
+        DataConfig(raw_pcap_dir="dummy", processed_dir="dummy", num_channels=7)
+
+
+def test_videomae_in_channels_4_offline_param_count() -> None:
+    """C=4 motion-channel ablation cell: ``in_channels=4`` builds cleanly
+    with random init and the patch_embed first conv has 4 input
+    channels (vs the project default 6). All other layers identical
+    to the C=6 model — only the patch_embed.projection in_channels
+    differs by 2."""
+    m4 = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                             in_channels=4, gradient_checkpointing=False)
+    m6 = VideoMAESmallForNID(num_classes=13, pretrained=None,
+                             in_channels=6, gradient_checkpointing=False)
+    proj4 = m4.backbone.embeddings.patch_embeddings.projection
+    proj6 = m6.backbone.embeddings.patch_embeddings.projection
+    assert proj4.weight.shape[1] == 4, proj4.weight.shape
+    assert proj6.weight.shape[1] == 6, proj6.weight.shape
+    # Param-count delta = 2 input channels × out_ch × T_p × H_p × W_p
+    # = 2 × 384 × 2 × 8 × 8 = 98_304
+    n4 = sum(p.numel() for p in m4.parameters())
+    n6 = sum(p.numel() for p in m6.parameters())
+    assert n6 - n4 == 2 * 384 * 2 * 8 * 8, (
+        f"C=4 vs C=6 param diff should equal 2 × patch_embed kernel size = 98304, "
+        f"got n6 - n4 = {n6 - n4}"
+    )
+
+
+@pytest.mark.slow
+def test_videomae_c4_adapter_consistency_with_c6_on_pretrained() -> None:
+    """C=4 + K400 sanity: ch[0:3] of the C=4 adapter output must be
+    bit-identical to ch[0:3] of the C=6 adapter output, since both
+    pass the SAME K400 weights through the SAME trilinear-downsample
+    code path (only ``n_extra`` differs: 1 vs 3). ch4 (the lone Kaiming
+    extra) must NOT match ch4 of C=6 (independent random draws).
+
+    Note on regime: VideoMAE-S K400 source kernel is (2, 16, 16) but
+    the project tube_patch is (2, 8, 8). The trilinear pass therefore
+    DOWNSAMPLES 16→8 spatially — this is the M3-001 regime, NOT the
+    I3D / R(2+1)D-18 bit-identity-vs-source regime. A literal
+    bit-identity test against the K400 source weights would fail by
+    design (the downsampled ch[0:3] is ~5× smaller in norm than the
+    source). The right cross-cell sanity is internal-consistency:
+    same source + same downsample + same adapter code = bit-identical
+    ch[0:3] across n_extra=1 (C=4) and n_extra=3 (C=6). M3-001
+    norm-ratio still applies and is verified separately by the
+    existing patch_embed adapter logging.
+
+    Slow-marked because it pulls the real K400 ckpt from the HF Hub.
+    """
+    K400 = "MCG-NJU/videomae-small-finetuned-kinetics"
+    # Build BOTH cells from the same K400 source. The internal
+    # _adapt_patch_embedding code path is shared; this test pins
+    # that the channel-count parametrisation does not perturb the
+    # ch[0:3] outputs.
+    m4 = VideoMAESmallForNID(num_classes=13, pretrained=K400,
+                             in_channels=4, gradient_checkpointing=False)
+    m6 = VideoMAESmallForNID(num_classes=13, pretrained=K400,
+                             in_channels=6, gradient_checkpointing=False)
+    proj4 = m4.backbone.embeddings.patch_embeddings.projection
+    proj6 = m6.backbone.embeddings.patch_embeddings.projection
+    assert proj4.weight.shape == (384, 4, 2, 8, 8)
+    assert proj6.weight.shape == (384, 6, 2, 8, 8)
+
+    # ch[0:3]: bit-identical across cells (same K400 + same downsample).
+    torch.testing.assert_close(
+        proj4.weight.data[:, :3], proj6.weight.data[:, :3],
+        atol=1e-7, rtol=0.0,
+    )
+
+    # ch4 of C=4 vs ch4 of C=6: both Kaiming-init but from independent
+    # random draws — must NOT match (otherwise the adapter is reusing
+    # state across calls, which would invalidate the M3-001 contract).
+    assert not torch.allclose(proj4.weight.data[:, 3], proj6.weight.data[:, 3]), (
+        "ch4 of C=4 matches ch4 of C=6 — adapter is reusing Kaiming "
+        "state across calls, which would invalidate the M3-001 contract"
+    )
+
+    # ch4 of C=4: Kaiming-normal mean ≈ 0, std ≈ sqrt(2 / fan_in).
+    # fan_in = in_ch_per_kernel × T × H × W = 1 × 2 × 8 × 8 = 128.
+    # Expected std ≈ sqrt(2/128) ≈ 0.125. Empirical mean / std should
+    # match within Monte-Carlo tolerance over 384 × 1 × 2 × 8 × 8 =
+    # 49,152 samples.
+    ch4 = proj4.weight.data[:, 3]
+    expected_std = (2.0 / 128) ** 0.5
+    actual_std = float(ch4.std().item())
+    actual_mean = float(ch4.mean().item())
+    # Loose tolerance on std (within 5% of theoretical) + tight on mean
+    # (zero-centered to within 0.01 over 49k samples).
+    assert abs(actual_mean) < 0.01, (
+        f"ch4 mean expected ~0, got {actual_mean:.4f}"
+    )
+    assert abs(actual_std - expected_std) / expected_std < 0.05, (
+        f"ch4 std expected ~{expected_std:.4f} (Kaiming sqrt(2/fan_in)), "
+        f"got {actual_std:.4f} (>5% deviation)"
+    )
+
+
 def test_m3_state_dict_loads_with_strict_false_for_scale_params() -> None:
     """An M3 ckpt has no scale_token / scale_embedding entries. load_state_dict
     must accept that with ``strict=False`` and report them as missing keys —

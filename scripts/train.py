@@ -154,6 +154,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--label-mode", choices=["raw15", "collapsed13"], default="collapsed13")
     p.add_argument("--num-workers", type=int, default=None,
                    help="override training.num_workers from config")
+    p.add_argument("--num-channels", type=int, default=None,
+                   help="Override data.num_channels from config (M5.10 dim-2 "
+                        "motion-channel ablation). Default None → keep YAML "
+                        "value (production = 6). Pass 4 to drop ch5/ch6 "
+                        "(direction Δ + packet count Δ) — leading channels "
+                        "are sliced inside model.forward.")
     p.add_argument("--shuffle-buffer", type=int, default=1000)
     p.add_argument("--device", default="cuda")
     p.add_argument("--debug", action="store_true",
@@ -661,6 +667,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     _validate_args(args)
 
     cfg = load_config(args.config)
+    if args.num_channels is not None:
+        # M5.10 dim-2 motion-channel ablation: override post-load. Pydantic
+        # re-validates the field on assignment, so the [4, 6] band check in
+        # DataConfig._channels_must_be_in_4_to_6 still fires.
+        cfg = cfg.model_copy(update={
+            "data": cfg.data.model_copy(update={"num_channels": int(args.num_channels)})
+        })
     training = cfg.training
     if args.debug:
         training = _override_for_debug(training)
