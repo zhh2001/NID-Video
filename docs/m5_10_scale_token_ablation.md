@@ -103,36 +103,114 @@ elsewhere: it stabilises Bot rare-class AUROC ranking under the
 head_lr ×5 + multi-scale regime; without it, Bot AUROC collapses
 from 0.4968 (Cell A) to 0.3224 (Cell B).
 
-### OOD penalty pairs (single-stream → opposite-stream)
+### OOD asymmetry: two framings (macro_f1 Δ)
 
-| Cell | trained on | OOD eval on | OOD macro_f1 | in-distribution macro_f1 | OOD penalty |
-|---|---|---|---:|---:|---:|
-| C | fast (Δt=100ms) | slow (Δt=1s) | 0.2895 | 0.4604 | −0.171 |
-| D | slow (Δt=1s) | fast (Δt=100ms) | 0.1683 | 0.5637 | **−0.395** |
+The single-stream cells (C, D) evaluate on both streams, so OOD
+asymmetry can be measured under two distinct framings. Both are valid
+macro_f1 Δ on the val split (val_n=18,156 for combined; 16,463 fast +
+1,693 slow); they measure different physical quantities and disagree
+on direction.
 
-**Asymmetric OOD penalty**: training on slow then evaluating on fast
-is a worse OOD jump than training on fast then evaluating on slow
-(Cell D −0.395 vs Cell C −0.171). The slow→fast direction is harder
-to bridge — plausibly because the slow Δt=1s frames have aggregated
-many more packets per bucket than fast Δt=100ms frames, and the
-model trained on aggregated representations cannot decompose them
-back to fine-grained per-100ms patterns. The fast→slow direction is
-easier because aggregated patterns are visible (with attenuation) in
-fine-grained frames too. Cell D's in-distribution macro_f1 0.5637
-also exceeds Cell C's 0.4604 — the slow stream's per-frame signal is
-more discriminative on its own, but it transfers worse.
+#### Framing A: within-cell in-distribution vs OOD
 
-Pair-wise observations (recorded for round 1 closeout Findings;
-no Findings.md edits this round per spec):
+For each single-stream cell, compare the same model's macro_f1 on its
+trained stream (in-distribution) vs the held-out stream (OOD):
+
+| Cell | in-distribution stream | OOD stream | Δ = OOD − in-distribution |
+|---|---:|---:|---:|
+| C (fast-only training) | fast 0.460445 | slow 0.289536 | **−0.171** |
+| D (slow-only training) | slow 0.563750 | fast 0.168269 | **−0.395** |
+
+Direction: slow→fast (Cell D, −0.395) is heavier than fast→slow
+(Cell C, −0.171). Measures the OOD-generalization vulnerability of
+each single-stream-trained model on its own.
+
+#### Framing B: cross-cell vs Cell A same-stream reference
+
+Each single-stream cell's OOD stream macro_f1 is compared to Cell A's
+macro_f1 on the same stream. Cell A was trained on the multi-scale
+50/50 mix, so it provides a "best-attainable" reference under the same
+fairness contract:
+
+| OOD stream | reference (Cell A same stream) | Δ |
+|---|---:|---:|
+| Cell C slow (fast→slow) | A slow 0.606877 | **−0.317** |
+| Cell D fast (slow→fast) | A fast 0.452541 | **−0.284** |
+
+Direction: fast→slow (−0.317) is heavier than slow→fast (−0.284).
+Measures the deployment-side penalty for single-stream training when
+evaluated against the multi-scale benchmark.
+
+#### Reconciliation
+
+The two framings disagree on direction because they measure different
+quantities. Framing A asks "how badly does a single-stream-trained
+model degrade on the OOD stream vs its own trained stream"; Framing B
+asks "how far is the single-stream OOD-eval from what a multi-scale
+model achieves on the same stream". Cell D under Framing A loses 0.395
+because its in-distribution slow score (0.564) is high — the OOD
+collapse is steep but starts from a high reference. Cell C under
+Framing B loses 0.317 because the multi-scale Cell A slow reference
+(0.607) is much higher than Cell A's fast reference (0.453) — slow
+stream multi-scale benchmark is harder to reach with OOD training.
+
+Both framings should be cited in paper Discussion. Recording both
+preserves the honest interpretation; collapsing to one direction
+selects a deployment-narrative bias.
+
+(See also the **Training budget caveat** section below: Cell C/D ran
+at native data budget — Cell C 24,260 grad_steps vs A's 48,530 (0.5×),
+Cell D 2,420 (0.05×) — so the within-cell in-distribution macro_f1
+that anchors Framing A is itself partially compute-limited, especially
+for Cell D. Both framings inherit this caveat.)
+
+## Training budget caveat (cross-cell macro_f1 interpretation)
+
+| Cell | grad_steps | × Cell A | wall time |
+|---|---:|---:|---:|
+| A (reuse) | 48,530 | 1.0× | (reused from M5.4 P2) |
+| B | 48,530 | 1.0× | 154 min |
+| C (fast-only) | 24,260 | 0.5× | 81.6 min |
+| D (slow-only) | 2,420 | 0.05× | 9.0 min |
+
+Single-stream cells (C, D) train at the native data budget of their
+respective stream; this is not an iso-grad-step contract. Cell C ran
+roughly half the optimizer updates of Cell A/B, and Cell D ran roughly
+1/20. Consequently, the macro_f1 differences D < C < A/B should be
+interpreted as **compound effects of OOD generalization degradation
+and training compute disparity**, not isolated OOD generalization.
+
+For context: the M5 vanilla CE trajectory (M4.8 ep1 / M5.1 ep3 / M5.2
+ep10 = 4,853 / 14,559 / 48,530 grad_steps → noise-free combined
+0.3324 / 0.4230 / 0.4677) suggests that at the 24,260 grad_step budget
+the CE-extrapolated ceiling is roughly 0.44–0.45; Cell C's 0.4341
+under focal+α at half the budget approaches but does not exceed this
+extrapolation, consistent with focal+α providing a modest lift over CE
+at matched grad_step count. Cell D's 0.2471 is far below any
+multi-epoch reference at 2,420 grad_steps and reflects both severe
+undertraining and the heaviest OOD stream mismatch.
+
+This caveat is recorded for honest cross-cell interpretation and is
+the source for a paper Limitations entry: "single-stream ablation
+cells trained at native data budget, not iso-grad-step; combined
+macro_f1 reflects compound effects."
+
+## Pair-wise observations
+
+Recorded for round 1 closeout Findings; no Findings.md edits this
+round per spec.
 
 - **A vs B (scale token alone, holding multi-scale fixed)**: token
   contribution to combined is null (+0.0004); token preserves Bot
   AUROC (Δ −0.175 without token).
 - **A vs C / A vs D (full main method vs single-stream)**: combined
   drops −0.042 / −0.229; the multi-scale + token combination provides
-  this margin. Slow OOD penalty (Cell C) and fast OOD penalty
-  (Cell D) drive the loss; in-distribution macro_f1 is comparable to
-  or higher than Cell A's stream-specific number in both cases.
+  this margin. The slow-stream and fast-stream macro_f1 deltas split
+  by direction (see OOD asymmetry section above for the two framings);
+  in-distribution macro_f1 is comparable to or higher than Cell A's
+  stream-specific number in both cases. Caveat: Cells C and D ran at
+  0.5× / 0.05× Cell A's grad_step budget — the compound interpretation
+  applies (see Training budget caveat above).
 - **B vs C / B vs D (multi-scale training alone, no-token side)**:
   same combined Δ −0.042 / −0.229 and same OOD penalties. Holding
   the no-token regime fixed, multi-scale training is worth +0.042
@@ -599,6 +677,58 @@ Bot."**
   consolidated into Trainer-internal `outputs/run_20260510_183624/` and
   rmdir'd post-training. Same pattern as Cell B + dim 2 + dim 1 SSv2.
 
+## Adapter ch[0:3] norm forensic correction (cross-doc)
+
+Cell B's training startup log records ch[0:3] norm = 5.24, verified
+offline as the deterministic output of
+``adapt_conv3d_to_6ch(K400_pretrained_proj, target=(2,8,8), n_extra=3)``
+at 5.2375 byte-for-byte.
+
+This contradicts the ch[0:3] norm citations in two prior round 1 docs:
+- `docs/m5_10_pretrained_ablation.md` cites K400 main P2 ch[0:3]
+  norm = 3.83 and SSv2 ch[0:3] norm = 5.22
+- `docs/m5_10_motion_channel_ablation.md` cites K400-derived ch[0:3]
+  norm = 3.85
+
+The forensic explanation: the prior 3.83/3.85 values appear to have
+been pulled from `--pretrained=""` (random init) re-eval logs rather
+than from K400-loaded training startup logs. Offline verification this
+commit (reproduction: load `MCG-NJU/videomae-small-finetuned-kinetics`
+or `MCG-NJU/videomae-small-finetuned-ssv2` via
+`_load_backbone_with_fallback`, then call
+`adapt_conv3d_to_6ch(b.embeddings.patch_embeddings.projection,
+target_kernel=(2,8,8), target_stride=(2,8,8), n_extra=3)` and take
+`new.weight.data[:, :3].norm().item()`):
+
+- K400 source + adapter:  norm = **5.237500** (verified deterministic)
+- SSv2 source + adapter:  norm = **5.219768** (verified deterministic)
+- |Δ| (SSv2 − K400)      = 0.017732
+
+The SSv2 verified norm 5.220 matches the dim 1 SSv2 doc's cited "5.22"
+to three decimal places — **only the K400 citation was the documentation
+error**; the SSv2 citation was correct.
+
+Implications:
+- Round 1 functional findings remain valid. The bit-identity contract
+  (C=4 ch[0:3] = C=6 ch[0:3] given same source) is enforced by
+  ``test_videomae_c4_adapter_consistency_with_c6_on_pretrained`` and
+  does not depend on the cited norm magnitude. The SSv2 vs K400
+  downstream-functional discrimination is anchored at the macro_f1
+  level (0.4413 vs 0.4756, Δ −0.034) and at the silent-load rule-out
+  level (different source ckpts produce distinguishable downstream
+  behaviour), not at the startup-time adapter-norm magnitude.
+- The dim 1 SSv2 doc's "SSv2 vs K400 norm discrimination" narrative
+  is now invalid: SSv2 norm 5.220 vs K400 norm 5.238 differ by only
+  0.018, which is **within rounding noise** of the cited two-decimal
+  precision (both round to "5.24" / "5.22"). The norm magnitude cannot
+  discriminate between SSv2 and K400 silent-load. A different
+  forensic anchor (e.g. macro_f1 Δ −0.034, or a per-layer state_dict
+  weight signature) must replace it during round 1 closeout.
+
+Per forensic-record discipline, this section records the correction
+and routes the dim 1 / dim 2 doc edits to the round 1 closeout batch
+update; the dim 1 / dim 2 doc text is **not** modified in this commit.
+
 ## Phase 0 sanity verification (recorded for Phase 1 readiness)
 
 `--use-scale-token` flag implementation (from the Phase 0 review):
@@ -755,3 +885,34 @@ Deferred to round 1 closeout (after Cells C and D land + dimensions
 draft will be batch-written once the M5.10 round 1 dimension suite is
 complete. Per round 1 spec, `prompts/Findings.md` is NOT edited this
 round.
+
+## Round 1 closeout 必修订项 (cross-doc)
+
+The following corrections are deferred to round 1 closeout batch
+update (do NOT apply in this revision):
+
+- `docs/m5_10_pretrained_ablation.md`:
+  - K400 main P2 ch[0:3] norm citation 3.83 → corrected to 5.24
+    (verified deterministic this commit, see Adapter ch[0:3] norm
+    forensic correction section).
+  - SSv2 ch[0:3] norm citation 5.22 → **already correct** (offline
+    verify this commit reproduced 5.219768, matches cited "5.22" to
+    three decimal places); no number change needed for this entry.
+  - **"SSv2 vs K400 norm discrimination" narrative needs full
+    rewrite** (not just number substitution): with K400 = 5.238 and
+    SSv2 = 5.220, the |Δ| 0.018 is below the cited two-decimal
+    precision and cannot discriminate between the two source ckpts.
+    A replacement forensic anchor for "no silent K400 load in the
+    SSv2 cell" is needed — candidates: (a) downstream macro_f1
+    Δ −0.034 (functional discrimination), (b) per-layer state_dict
+    weight signature comparison (e.g., norm of a deeper layer that
+    diverges between the two pretraining tasks), (c) explicit
+    HuggingFace ckpt id verbatim from `_load_backbone_with_fallback`
+    log line.
+- `docs/m5_10_motion_channel_ablation.md`:
+  - K400-derived ch[0:3] norm citation 3.85 → corrected to 5.24
+    (same root cause: prior log was likely from random-init re-eval).
+
+These corrections are cross-doc and should land in a single closeout
+commit alongside the broader Findings.md batch update (per
+M5_handoff_summary_v4.md §"Round 1 closeout 必修订项").
