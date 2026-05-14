@@ -179,7 +179,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         "via --model (which selects the right default ckpt).")
     p.add_argument("--model",
                    choices=["videomae_small", "timesformer_small", "c3d_small",
-                            "i3d", "r2plus1d_18", "convlstm"],
+                            "i3d", "r2plus1d_18", "convlstm",
+                            "resnet18_snapshot"],
                    default="videomae_small",
                    help="Backbone selector (M5.5). Default keeps the M3-onward "
                         "main method. Baselines build the same forward "
@@ -342,6 +343,19 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             pretrained=load_pretrained,
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=training_cfg.gradient_checkpointing,
+        )
+    if name == "resnet18_snapshot":
+        from nid_video.baselines.snapshot_2d import ResNet18SnapshotForNID
+        # M6.3 2D snapshot — torchvision ResNet-18 on the t=8 middle frame.
+        # ``--pretrained`` is interpreted as a boolean (same pattern as
+        # I3D / R(2+1)D-18): truthy non-empty → ImageNet DEFAULT weights
+        # (M6.3.IN), empty / "none" / "false" / "0" → random Kaiming
+        # (M6.3.RN). Per Path B: IN → --head-lr-mul 5.0; RN → 1.0.
+        return ResNet18SnapshotForNID(
+            num_classes=n_classes,
+            pretrained=pretrained,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
         )
     raise SystemExit(
         f"--model {name!r} not yet implemented in M5.5"

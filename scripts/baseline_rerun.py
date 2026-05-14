@@ -96,7 +96,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="HF model id; default None — backbone weights come from --resume.")
     p.add_argument("--model",
                    choices=["videomae_small", "timesformer_small", "c3d_small",
-                            "i3d", "r2plus1d_18", "convlstm"],
+                            "i3d", "r2plus1d_18", "convlstm",
+                            "resnet18_snapshot"],
                    default="videomae_small",
                    help="Backbone selector — must match what the source training "
                         "run used. Default keeps the M3-onward main method; M5.5 "
@@ -196,6 +197,20 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
         from nid_video.models.r2plus1d_18_nid import R2Plus1D18ForNID
         # Same rationale as I3D: pretrained=False at re-eval time.
         return R2Plus1D18ForNID(
+            num_classes=n_classes,
+            pretrained=False,
+            in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
+        )
+    if name == "resnet18_snapshot":
+        from nid_video.baselines.snapshot_2d import ResNet18SnapshotForNID
+        # M6.3 — at re-eval time weights load from --resume; we build the
+        # 6-channel ResNet-18 shell with pretrained=False so the ImageNet
+        # ckpt is not re-downloaded (and so the ch[0:3] norm in the
+        # adapter log is the random-Kaiming value, not the ImageNet
+        # value — matches the M5.10 video-cell behaviour for
+        # pretrained=None at re-eval).
+        return ResNet18SnapshotForNID(
             num_classes=n_classes,
             pretrained=False,
             in_channels=cfg.data.num_channels,
