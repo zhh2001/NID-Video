@@ -885,7 +885,13 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, 5-cell evidence anchored, supersedes M5-005 v2 (M5-005 v2 留作 historical record);paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Methods §3.5 Fairness contract + Discussion §6.4 Three-way coupling
+> - **Use**: Paper §6 旗舰 finding — Bot AUROC collapse 联合条件 (head_lr ×5) ∧ (multi-scale training) jointly held isolated via dim 4 4-cell factorial。任一条件 broken → Bot AUROC ≥ 0.67 preserved。Scale token 是 joint regime partial mitigator(Cell A 0.4968 中间态);supersedes M5-005 v2 "head_lr × pretrained-status" scope。
+> - **Quote candidate**: "Bot AUROC collapse to 0.3224 (Cell B, head_lr ×5 + multi-scale + no scale token) is contingent on the joint presence of head_lr ×5 and multi-scale training; ablating either condition restores Bot AUROC to at least 0.67 (Cells C/D), with the scale token providing partial mitigation at 0.4968 under the joint condition."
+> - **Figure idea**: 5-cell factor isolation bar chart (5 cells × Bot AUROC + factor decomposition table annotation)
+> - **Risk if missed**: Reviewer 问 "Bot AUROC 0.3224 vs 0.6931 跨 cell 1.7× 差异,what mechanism";本 finding 提供 5-cell factorial isolation evidence,without this hp design choice 看起来 ad-hoc。
+> - **Cross-link**: M5-005 v2 (superseded historical anchor) + M5-007 (cross-arch context) + M5-016 (scale token specific role) + M6-012 (1D byte partial overturn cross-paradigm)
+> - **Priority**: HIGHEST
 
 ### Finding M5-008: K400 pretrain transfer = 5-epoch loss-level inductive head start [HIGHEST]
 
@@ -895,7 +901,13 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, 2-pair epoch-aligned evidence anchored;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Methods §3.4 Pretraining choice + Discussion §6.2 K400 prior mechanism
+> - **Use**: K400 prior 不只下游 final-F1 加分,而是 5-epoch loss-level inductive head start。Paper §3.4 narrative 从 "K400 helps" precision 化为 "K400 = loss-level inductive prior worth 5 epochs of from-scratch training"。
+> - **Quote candidate**: "Kinetics-400 pretrained backbones reach at epoch 0 the combined and slow-stream macro_f1 levels random-init backbones achieve only after 5 epochs of training; K400 transfer can be quantified as a 5-epoch loss-level inductive head start rather than a uniform asymptotic lift."
+> - **Figure idea**: Figure #10 — K400 head start anchor(8-run grouped bar K400 vs random epoch 0 + arrow annotation "K400 epoch 0 ≈ random epoch 5+")
+> - **Risk if missed**: Paper §3.4 K400 choice 看起来是 ad-hoc convention rather than quantified design choice;reviewer 问 "K400 pretrain 与 random init Δ 量化"。
+> - **Cross-link**: M5-013 (SSv2 反例 K400 specific not video-generic) + M5-015 (K400 slow-stream 主受益者) + M6-008 (12-cell cross-paradigm hierarchy anchor)
+> - **Priority**: HIGHEST
 
 ### Finding M5-013: SSv2 pretrain 对 NID corpus 零 transfer(combined Δ +0.003 within noise + Bot AUROC −0.263)— Idea.md v1 §2.2.3 corpus-agnostic claim 反例 [HIGHEST]
 
@@ -905,7 +917,13 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, evidence anchored, conflicts with Idea.md v1 §2.2.3 claim;Idea.md 文本 revision deferred to round 1 closeout cross-doc task;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Methods §3.4 + Discussion §6.2 + Limitations §7.4
+> - **Use**: Idea.md v1 §2.2.3 corpus-agnostic claim 反例。SSv2 同 video pretrain corpus,但 NID transfer ≈ 0(combined Δ +0.003 within noise);Bot AUROC 比 random 还低 −0.263。**K400 transfer specific 而非 video-pretrain generic — corpus 选择是 active mechanism**。Idea.md §2.2.3 v2 narrative anchor + paper §3.4 + §6.2 corpus-specific transfer evidence + §7 honest scope acknowledgment。
+> - **Quote candidate**: "Something-Something-V2 pretrained backbones contribute +0.003 combined macro_f1 over random initialisation on the NID task — within noise — while Kinetics-400 pretraining contributes +0.037 (an order of magnitude larger). The asymmetry locates K400 transfer in corpus-specific semantic content rather than a generic 'video pretrain helps' inductive prior."
+> - **Figure idea**: 3-cell pretrained-source per-class F1 spider chart(random / K400 / SSv2)anchored at paper §6.2
+> - **Risk if missed**: Idea.md v1 over-claim "video pretrain transfer 通用" 未被 SSv2 反例 retract → reviewer 用 SSv2 数据 attack。
+> - **Cross-link**: M5-008 (K400 head start mechanism) + M5-015 (K400 slow-stream specific lift) + M6-005 (M6.3 IN vs RN ResNet-18 within-noise 跨 paradigm pretrain transfer cluster) + Idea.md §2.2.3 v2 narrative
+> - **Priority**: HIGHEST
 
 ### Finding M5-014: motion channels(ch5+ch6) + scale token combined macro_f1 贡献 ≈ 0 [HIGH]
 
@@ -915,7 +933,13 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, 2-cell pair Δ anchored;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Methods §3 framing reframe + Discussion §6.5 Pareto navigators
+> - **Use**: Motion channels(C=4 vs C=6)combined macro_f1 contribution +0.0049 within noise;scale token combined contribution +0.0004 within noise。Paper §3 framing 从 "novel contributions" 改为 "Pareto navigators / secondary-metric load-bearing":motion channels 维持 slow-stream macro_f1 + per-class signature;scale token 是 joint regime Bot AUROC stabilizer(M5-016 detail)。诚实 negative finding 是 paper §3 framing 修订的 evidence anchor。
+> - **Quote candidate**: "Motion channels and the scale token contribute near-zero combined macro_f1 (within ±0.005 noise band); their load-bearing role lies at the secondary-metric layer — slow-stream macro_f1 preservation and Bot AUROC stabilization respectively. We reframe these design choices as Pareto navigators rather than primary-metric contributions."
+> - **Figure idea**: 5-cell factor decomposition bar chart(combined / fast / slow / Bot AUROC)with motion-channel + scale-token isolation
+> - **Risk if missed**: Paper §3 over-claim motion / scale-token as primary contributions → reviewer ablation 不动 challenges。
+> - **Cross-link**: M5-005 v3 (三维耦合) + M5-016 (scale token specific role) + M5-017 (single-stream OOD asymmetry — Pareto navigator framework supplementary)
+> - **Priority**: HIGH
 
 ### Finding M5-016: scale token 在 K400+×5+multi-scale 联合 regime 下 stabilize Bot AUROC(Bot AUROC Δ −0.175 with combined ≈ 0)[HIGH]
 
@@ -925,7 +949,12 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, single-cell-pair Bot AUROC Δ anchored;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Methods §3.4 scale token reframe + Discussion §6.5
+> - **Use**: Scale token combined macro_f1 contribution +0.0004,but Bot AUROC stabilization +0.175(Cell A 0.4968 vs Cell B 0.3224 collapse)。在 K400 + ×5 + multi-scale 联合 regime 下 specific load-bearing role 是 Bot rare-class signal stabilizer 不是 multi-scale lever。Paper §3.4 framing 转向 "Pareto navigator for Bot rare-class secondary-metric"。
+> - **Quote candidate**: "The scale token contributes +0.0004 combined macro_f1 (within noise) but +0.175 Bot AUROC under the joint head_lr ×5 + multi-scale training regime; its load-bearing role is rare-class signal stabilization in a specific hp × training-stream regime, not a primary-metric lever."
+> - **Risk if missed**: Paper §3.4 scale token 仍以 "multi-scale conditioning innovation" framing,reviewer ablation 不动 challenges(dim 4 Cell B factorial 已 isolate)。
+> - **Cross-link**: M5-005 v3 (三维耦合) + M5-014 (Pareto navigator framing source) + M2-008 (Bot n=12 statistical edge — single-correct flip 局限)
+> - **Priority**: HIGH
 
 ### Finding M5-010: macro_f1 trajectory dip 数 + magnitude 与 architecture × head_lr 4×2 matrix 强相关(head_lr ×5 cells dip 3-5× ×1 cells)[HIGH]
 
@@ -935,7 +964,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, qualitative pattern across 12 cells;quantitative dip-count table deferred to design layer;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.3 Training dynamics + per-cell trajectory analysis
+> - **Use**: Combined macro_f1 trajectory dip 数 + magnitude 与 architecture × head_lr 4×2 matrix 强相关 — head_lr ×5 cells 平均 dip 是 head_lr ×1 cells 3-5×。Paper §6.3 narrative anchor:training dynamics 不平稳,具体 dip shape 是 hp × architecture 交互的 measurable signature 而非 noise floor。
+> - **Risk if missed**: Paper §6 仅 report end-epoch number 错过 trajectory shape information;reviewer 看 dip count 多 cell 但不知其原因。
+> - **Cross-link**: M5-005 v3 (head_lr × init × stream 三维耦合,dip pattern 是其 derived signature) + M5-007 (6-baseline cross-arch dip count comparison) + M5-009 (final-epoch jump pattern sibling)
+> - **Priority**: HIGH
 
 ### Finding M5-012: TimeSformer R1 唯一 sustained Bot AUROC > 0.7 + DDoS smooth gradient — property tightly bound to random + head_lr ×1 regime [HIGH]
 
@@ -945,7 +978,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, cross-cell evidence anchored;refines M5-005 v3 splitting-variable mechanism;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.4 TimeSformer R1 双重 unique architectural anchor
+> - **Use**: TimeSformer R1(random init + head_lr ×1 effective)唯一 sustained Bot AUROC > 0.7(0.7151)+ 唯一 DDoS smooth gradient(无 final-epoch jump,M5-009 例外)。Paper §6.4 narrative anchor:某些 cross-architecture × hp regime combinations 产生 unique trajectory properties,但 regime-tied attribution(R1.5 intentional ×5 ablation supplementary 0.4616 + Bot 0.5940 验证 attribute)。
+> - **Risk if missed**: Reviewer 用 R1 0.4836 / 0.7151 数据 attack "为什么 R1 跨 5 baselines unique";本 finding R1 vs R1.5 forensic 解释 + attribute mechanism。
+> - **Cross-link**: M5-005 v3 (三维耦合) + M5-006 (matcher bug 产生 R1 vs R1.5 mechanism) + M6-012 (M6.1 1D byte Bot AUROC 0.7402 进一步 cross-paradigm 推广)
+> - **Priority**: HIGH
 
 ### Finding M5-009: 18 cells DDoS F1 final-epoch sharp jump universal(5/6 M5.5 baselines + 7 dim 1+2+4 forward cells);M6.1 1D byte cell macro_f1 final-epoch jump observed but DDoS-specific not confirmed [MEDIUM]
 
@@ -955,7 +992,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, universal pattern across 18 cells (1 exception: TimeSformer R1);paper-value annotation deferred to design layer(本 P1 update)
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**(等 P4 batch annotation)
+> - **Section**: Discussion §6.3 Training dynamics universal patterns
+> - **Use**: NID + dominant-rule labeling + cosine decay 末端 universal final-epoch DDoS F1 jump pattern,18 cells confirm(M5.5 R2 + dim 1+2+4 + retrofits)。M6.1 1D byte 是 macro-aggregated jump but DDoS-specific 不 strict confirm(Δ +0.0744 < +0.10),M5-009 仍 18-cell anchor。Paper §6.3 用作 "training dynamics 跨 architecture × pretraining × paradigm 表现差异 vs 一致性" nuanced 数据点 — universal at video paradigm,不 generalize strict to 1D byte paradigm。
+> - **Risk if missed**: Reviewer 看 paper §6 final-epoch numbers,问 "DDoS final-epoch jump 是 universal 还是 cell-specific";本 finding 提供 18-cell 实证 anchor + 跨 paradigm scope honest disclosure。
+> - **Cross-link**: M5-011 (GoldenEye oscillation universal sibling 18-19 cells) + M6-009 (M6.1 macro-jump observed but DDoS-specific not confirm — paradigm scope refinement)
+> - **Priority**: MEDIUM
 
 ### Finding M5-011: 18 cells GoldenEye F1 epoch-to-epoch oscillation universal(magnitude 0.1-0.4,α reweight 抬高 mean 但不消除)[MEDIUM]
 
@@ -965,7 +1006,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, universal pattern across all 18 cells with no exception;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.3 Noisy-attractor universal pattern
+> - **Use**: GoldenEye F1 epoch-to-epoch oscillation 跨 18-19 cells universal,magnitude [0.06, 0.44],α reweight 不消除(P2 update M5-004 19-cell sibling)。Paper §6.3 用作 "small-support softmax + focal+α 联合 produce noisy-attractor trajectory 是 representation × loss 联合的 stable signature"实证;non-removable architectural / hp lever。
+> - **Risk if missed**: Reviewer 看 GoldenEye F1 oscillation 问 "cell-specific noise 还是 universal";本 finding 19-cell 实证 close 这个 attack vector。
+> - **Cross-link**: M5-004 (focal loss prevent vs correct + α saturation) + M5-009 (DDoS final-jump sibling universal) + M6-011 (M6.1 GoldenEye AUROC decay directional variant — single-cell anomaly within universal oscillation pattern)
+> - **Priority**: MEDIUM
 
 ### Finding M5-015: K400 prior 在 slow stream 上 lift 是 fast stream 3.6×(Δ slow +0.098 vs Δ fast +0.027)[MEDIUM]
 
@@ -975,7 +1020,12 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, stream-decomposed Δ anchored from dim 1 主表;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.2 K400 stream-decomposed transfer
+> - **Use**: dim 1 cross-cell K400 prior Δ slow macro_f1 +0.098 远超 Δ fast +0.027,K400 prior 在 slow stream(1s 窗口)上 lift 是 fast stream 的 3.6×。Stream-decomposed evidence supports "K400 prior 对 longer-time-scale temporal patterns 信号 stronger" 推测。
+> - **Quote candidate**: "K400 pretraining lifts slow-stream macro_f1 by 0.098 over random initialisation while lifting fast-stream by only 0.027 — a 3.6× asymmetry. K400's 1-second temporal sensitivity transfers preferentially to the slow stream's 1-second window, with fast stream's 100ms granularity less aligned with K400's pretraining regime."
+> - **Risk if missed**: Paper §6.2 K400 prior framing 缺 stream-decomposed evidence,reviewer 问 "K400 prior helps slow / fast / uniform?"。
+> - **Cross-link**: M5-008 (K400 5-epoch head start mechanism) + M5-013 (SSv2 反例 corpus-specific) + M5-007 sub(c) (ConvLSTM slow-stream inverse — paradigm-architecture × stream interaction)
+> - **Priority**: MEDIUM
 
 ### Finding M5-017: dim 4 single-stream OOD asymmetry — Framing A(within-cell)slow→fast heavier vs Framing B(cross-cell vs A)fast→slow heavier;两 framing 方向相反 [MEDIUM]
 
@@ -986,7 +1036,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, dual-framing macro_f1 Δ anchored;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.3 single-stream OOD asymmetry + Limitations §7
+> - **Use**: dim 4 Cell C/D 单 stream 训练 + 双 stream eval cross-stream OOD evaluation。Framing A(within-cell)slow→fast(D)Δ −0.395 heavier than fast→slow(C)Δ −0.171;Framing B(cross-cell)fast→slow(C vs A)Δ −0.317 heavier than slow→fast(D vs A)Δ −0.284。两 framing measure 不同物理量(within-cell stream consistency vs cross-cell stream-loss decomposition),都 record。Cell C/D undertraining confound(Cell D 2,420 grad_steps vs A/B 48,530)论文 §7 显式 acknowledge。
+> - **Risk if missed**: Reviewer 问 single-stream training implication on cross-stream eval;本 finding 提供 dual-framing 实证 + undertraining caveat。
+> - **Cross-link**: M5-005 v3 (stream-count factor) + M5-014 (Pareto navigator) + M5-015 (K400 stream-decomposed transfer)
+> - **Priority**: MEDIUM
 
 ### Finding M5-018: 跨 session 8 instances CC stop-and-report 主动 catch 设计层错误 — collaborative error correction methodology infrastructure [LOW]
 
@@ -1004,7 +1058,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, process-level methodology record;8 instances anchor;paper-value annotation deferred to design layer(本 P1 update)
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**(等 P4 batch annotation)
+> - **Section**: Methodology / Acknowledgments (可选 mention)
+> - **Use**: CC stop-and-report collaborative error correction methodology infrastructure 跨 round 1 + N+1 sessions 累积 8 instances(7 strict + 1 procedural transparent post-hoc)。Paper §6.1 Silent failure detection chain narrative process-level companion — 不仅 silent failure 在 code / data 层 detect,设计层 prompt error 也 by execution layer detect。可选 acknowledgments section mention 或 §6 methodology infrastructure subsection。
+> - **Risk if missed**: Paper §6 methodology rigor narrative 缺 process-level evidence。
+> - **Cross-link**: TRANSITION-005 / M4-001 / M4-002 / M4-010a / M5-003 / M5-006 (silent failure detection chain code-data anchor) + 本 finding (process-layer companion)
+> - **Priority**: LOW
 
 ---
 
@@ -1018,7 +1076,12 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, mechanism-isolated;attack-priority aggregation rule alternative 留作 round-2 / closeout consideration;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.5 paradigm × aggregation-rule pathology
+> - **Use**: M6.2 RF/XGB max-confidence aggregation BENIGN-bias pathology — combined macro_f1 0.1165-0.1793,多数 attack F1=0,paradigm × aggregation-rule artifact 非 model bug。Paper §5 cross-paradigm 12-row 表 flow-feature row 数字解释 anchor + paper §6 paradigm decision-rule pathology 双 case study(与 M6-009 1D byte argmax-collapse 形成 paradigm-decision-rule double anchor)。文献 per-flow metrics 0.90+ 是 eval space artifact(M6-003 detail)。
+> - **Quote candidate**: "M6.2 flow-feature baselines (RF / XGB) achieve combined macro_f1 0.1165–0.1793 under per-window max-confidence aggregation, with BENIGN F1 = 0.96 dominating and most attack classes F1 = 0 — a paradigm × aggregation-rule artifact rather than a model implementation bug. Published per-flow flow-feature accuracy figures (≥ 0.90) reflect a different evaluation space; cross-paradigm comparison under window-level aggregation produces this BENIGN-biased pathology."
+> - **Risk if missed**: Paper §5 flow row 数字看起来 incompetent;reviewer 问 "为什么 RF/XGB 这么低,文献 0.90+"。本 finding 提供 mechanism + eval-space difference explanation。
+> - **Cross-link**: M6-002 (Heartbleed flow-paradigm specific vulnerability) + M6-003 (per-flow vs per-window eval space difference) + M6-009 (1D byte argmax-collapse parallel paradigm pathology)
+> - **Priority**: HIGHEST
 
 ### Finding M6-002: M6.2 Heartbleed F1 = 0 — per-flow paradigm 对 long-lived rare-class 本征 vulnerability(11 flow rows vs 248 val window samples)[HIGH]
 
@@ -1028,7 +1091,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, structural per-flow paradigm limitation;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.5 per-flow paradigm long-lived rare-class vulnerability
+> - **Use**: Heartbleed CSV 11 flow rows vs 248 val window samples — per-flow paradigm 对 long-lived rare-class 本征 vulnerability(11/248 = 4.4% per-flow representation,远低于 per-window 1.4%)。M6.2 RF Heartbleed F1 = 0;XGB AUROC 0.38 anti-correlated。Paper §6.5 paradigm per-class capacity scope:per-flow representation 把 long-duration attacks 压缩进 single feature vector,丢失 within-flow temporal evolution 信息。
+> - **Risk if missed**: Paper §6 paradigm per-class signature 仅 isolate 整体 ordering 不 surface 具体 mechanism。
+> - **Cross-link**: M6-001 (aggregation rule artifact sibling) + M6-007 (Heartbleed paradigm-specific signal-capture cross-paradigm)
+> - **Priority**: HIGH
 
 ### Finding M6-003: per-flow IDS 0.90+ macro_f1 vs 本工作 per-window 0.18 数字差异 = eval-space artifact 非 model 性能突变 — SOC deployment workflow framing [HIGH]
 
@@ -1038,7 +1105,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, framing argument anchored;literature cite list 留 paper-drafting 阶段填;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Methods §4 Evaluation policy + Discussion §6.5
+> - **Use**: per-flow eval(literature standard for flow-feature paradigm)vs per-window aggregation(本工作)产生不同 paradigm rankings。M6.2 per-flow macro_f1 文献风格 0.85+ vs per-window 0.12-0.18。Paper §4 eval policy choice + §6.5 acknowledge eval-space discontinuity。Reproducibility 角度:per-window aggregation 与 video / 2D / 1D paradigm 一致,fair contract 跨 paradigm。Per-flow 仅适合 flow-feature paradigm self-eval。
+> - **Risk if missed**: Paper §4 eval policy 选择不解释;reviewer 用文献 0.90+ "你测错了" attack。
+> - **Cross-link**: M6-001 (BENIGN-bias artifact under per-window) + M6-002 (Heartbleed flow vulnerability) + M5-003 (no_cycle eval policy fairness contract sibling)
+> - **Priority**: MEDIUM
 
 ### Finding M6-004: 11-cell paradigm 排名 strict — video > 2D snapshot > flow(combined macro_f1)— paper §1 立论关键 empirical anchor [HIGHEST]
 
@@ -1048,7 +1119,13 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, 11-cell ordering anchored;paper Table 1 candidate;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Results §5.1 12-row cross-paradigm table(refined by M6-008)
+> - **Use**: 跨 paradigm hierarchy video > 1D byte > 2D snapshot > flow,12-cell evidence(原 M6-004 11-cell + M6.1 加 1 row → M6-008 hierarchy update)。Paper §5 12-row table flagship finding。Note hierarchy 是 single-stream apples-to-apples(24,260 grad_steps fast-only)for paradigm-bound assessment + multi-stream full-budget(48,530 grad_steps)for paradigm-favorable assessment。
+> - **Quote candidate**: "Under matched single-stream training budget (24,260 grad steps, head_lr ×1 contract), the cross-paradigm hierarchy is video [0.4341, 0.5197] > 1D byte 0.2444 > 2D snapshot [0.2061, 0.2097] > flow [0.1165, 0.1793]; the 0.19 gap between 1D byte and the video fast-only counterpart is substantial and paradigm-bound."
+> - **Figure idea**: paper §5 12-row table + 2D scatter plot(paradigm vs combined macro_f1 + per-class colors)
+> - **Risk if missed**: Paper §5 表的核心 hierarchy claim 缺 12-cell apples-to-apples 实证;reviewer 问 "fair comparison contract"。
+> - **Cross-link**: M6-008 (12-cell update + apples-to-apples comparison) + M6-006 (Bot AUROC cross-paradigm refinement) + M6-007 (Heartbleed cross-paradigm refinement) + M5-007 (within-video cross-architecture)
+> - **Priority**: HIGHEST
 
 ### Finding M6-005: ImageNet pretrain 对 NID 6-channel snapshot 零 measurable benefit(M6.3.RN 0.2097 vs IN 0.2061 Δ +0.0036 within noise)— pretrain transfer 是 corpus × modality × downstream 联合特征 [HIGH]
 
@@ -1058,7 +1135,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, IN vs RN Δ anchored at within-noise magnitude;adds 3rd data point to pretrain-transfer cluster (M5-008 + M5-013 + this);paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.2 pretrain transfer paradigm-by-paradigm consistency
+> - **Use**: M6.3 IN ResNet-18(ImageNet pretrain)vs RN ResNet-18(random)combined Δ −0.0036 within noise(IN 0.2061 vs RN 0.2097)。**Pretrain transfer 在 2D snapshot paradigm 上 effectively zero**,与 video paradigm(K400 transfer +0.037 substantial / SSv2 transfer +0.003 within noise)形成对照 — pretrain transfer 是 corpus × modality × downstream-task 联合特征,non-universal。M5-008(K400)+ M5-013(SSv2)+ M6-005(IN ResNet)= 3 段 pretrain transfer 跨 paradigm 实证 anchor。
+> - **Risk if missed**: Paper §6.2 pretrain transfer narrative 仅 video paradigm 内 evidence;reviewer 问 "pretrain transfer 在 2D / 1D paradigm 上 generalize?"。
+> - **Cross-link**: M5-008 (K400 head start) + M5-013 (SSv2 反例 corpus-specific) + M6-008 (12-cell hierarchy data anchor)
+> - **Priority**: MEDIUM
 
 ### Finding M6-006: M5-005 v3 三维耦合 Bot signal preservation 仅在 video paradigm 内有效 — Bot rare-class 检测需要 temporal axis [HIGH]
 
@@ -1068,7 +1149,12 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, 10-cell Bot AUROC cross-paradigm comparison anchored;refines M5-005 v3 scope from "across regimes" to "within video paradigm";paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.4 Bot rare-class paradigm scope(refined by M6-012)
+> - **Use**: Original 11-cell finding "Bot AUROC video-paradigm-exclusive preservation"。N+2 P1 M6-012 partial overturn(M6.1 1D byte AUROC 0.7402 > video top 0.7151)→ refined scope "Bot AUROC preservation 在 video + 1D byte paradigm 都 viable,2D snap + flow 失败;argmax F1 paradigm-uniform 0 due to n=12 statistical edge"。**Temporal axis 不是 strict prerequisite for ranking signal preservation**。Paper §6.4 narrative anchor with M6-012 refinement note。
+> - **Quote candidate**: "Bot AUROC preservation (≥ 0.67) is achieved by random-init video backbones, TimeSformer-Small under head_lr ×1 contract, and the 1D byte-level Transformer (0.7402); 2D snapshot and flow paradigms collapse Bot ranking; per-class F1 = 0 across all paradigms reflects the n = 12 statistical edge, not paradigm capacity."
+> - **Risk if missed**: Paper §6 overstates Bot 需要 temporal axis;reviewer 用 M6.1 数据 attack。本 finding 主动 refinement scope。
+> - **Cross-link**: M5-005 v3 (三维耦合 video-internal) + M6-012 (1D byte partial cross-paradigm overturn) + M2-008 (Bot n=12 statistical edge)
+> - **Priority**: HIGH
 
 ### Finding M6-007: Heartbleed F1 paradigm-specific signal-capture case study(video ≥ 0.97 vs 2D snapshot 0.13-0.26 vs flow 0.00)[MEDIUM]
 
@@ -1078,7 +1164,11 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - **Status**: open finding, single-class paradigm-decomposition case study;paper-value annotation deferred to design layer
 
 > 🎯 **论文价值标注**
-> - **Pending design layer**
+> - **Section**: Discussion §6.4 paradigm-specific signal-capture case study
+> - **Use**: Heartbleed F1 paradigm-specific:video ≥ 0.97 / 2D snap [0.13, 0.26](IN/RN)/ flow 0.00(RF/XGB)/ 1D byte 0.2367(M6.1 Phase 1)。Heartbleed signal = static spatial pattern + temporal continuity 联合;video tube capture 两者;2D snap 抓 static 丢 temporal;flow per-flow detail 丢 per-window aggregation;1D byte 抓 byte content 但失 cross-packet temporal binding。Paper §6.4 case study + M6-010(slowloris 1D-favored single-class)形成 paradigm-specific signal-capture 双 case anchor。
+> - **Risk if missed**: Paper §5 12-row 表 average ranking 错过 per-class paradigm signature heterogeneity。
+> - **Cross-link**: M6-002 (Heartbleed flow vulnerability mechanism) + M6-008 (12-cell hierarchy) + M6-010 (slowloris 1D-favored sibling case)
+> - **Priority**: MEDIUM
 
 ### Finding M6-008: Cross-paradigm 12-cell hierarchy update — 1D byte joins between video and 2D snapshot [HIGH]
 
