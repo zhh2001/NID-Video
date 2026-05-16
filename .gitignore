@@ -24,6 +24,11 @@ data/processed/**
 outputs/**
 !outputs/.gitkeep
 
+docs/**
+
+!docs/Findings.md
+!outputs/m6.3_cross_paradigm_summary.json
+
 # Binary blobs
 *.pcap
 *.pcapng

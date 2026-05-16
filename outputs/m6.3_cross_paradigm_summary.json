@@ -1,0 +1,828 @@
+{
+  "schema_version": "m6.3-cross-paradigm-v1",
+  "label_mode": "collapsed13",
+  "expected_val_n_total": 18156,
+  "expected_val_n_fast": 16463,
+  "expected_val_n_slow": 1693,
+  "cells": [
+    {
+      "cell": "main_P2_k400_ms_token",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260502_184512/m5_4_phase2_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.47557640075683594,
+        "accuracy": 0.9559925198554993,
+        "auroc_macro": 0.7640677690505981
+      },
+      "fast": {
+        "macro_f1": 0.45254093408584595
+      },
+      "slow": {
+        "macro_f1": 0.6068771481513977
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9777764678001404,
+        "DoS Hulk": 0.6066350936889648,
+        "PortScan": 0.5957446694374084,
+        "DDoS": 0.4590163826942444,
+        "DoS GoldenEye": 0.41304346919059753,
+        "FTP-Patator": 0.07518796622753143,
+        "SSH-Patator": 0.0803571417927742,
+        "DoS slowloris": 0.8880000114440918,
+        "DoS Slowhttptest": 0.1515151560306549,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9840637445449829
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.9035980701446533,
+        "DoS Hulk": 0.9050779342651367,
+        "PortScan": 0.9560944437980652,
+        "DDoS": 0.9928349256515503,
+        "DoS GoldenEye": 0.9523996710777283,
+        "FTP-Patator": 0.9001306891441345,
+        "SSH-Patator": 0.9171932339668274,
+        "DoS slowloris": 0.9967968463897705,
+        "DoS Slowhttptest": 0.9120444655418396,
+        "Bot": 0.49681252241134644,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.99989914894104
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "dim1_random",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260507_205921/m5_10_random_videomae_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.43861550092697144,
+        "accuracy": 0.9455827474594116,
+        "auroc_macro": 0.7735099196434021
+      },
+      "fast": {
+        "macro_f1": 0.4259105622768402
+      },
+      "slow": {
+        "macro_f1": 0.5086175799369812
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9734675288200378,
+        "DoS Hulk": 0.4428044259548187,
+        "PortScan": 0.5357142686843872,
+        "DDoS": 0.5410334467887878,
+        "DoS GoldenEye": 0.2777777910232544,
+        "FTP-Patator": 0.05369127541780472,
+        "SSH-Patator": 0.12711864709854126,
+        "DoS slowloris": 0.8007246255874634,
+        "DoS Slowhttptest": 0.09615384787321091,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9762845635414124
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.8947033882141113,
+        "DoS Hulk": 0.8756259083747864,
+        "PortScan": 0.9563301205635071,
+        "DDoS": 0.9880107641220093,
+        "DoS GoldenEye": 0.9164537191390991,
+        "FTP-Patator": 0.9190609455108643,
+        "SSH-Patator": 0.9295234084129333,
+        "DoS slowloris": 0.9907987117767334,
+        "DoS Slowhttptest": 0.9108795523643494,
+        "Bot": 0.6742954850196838,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9999457001686096
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "dim1_ssv2",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260508_213702/m5_10_ssv2_videomae_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.4412825405597687,
+        "accuracy": 0.9546706080436707,
+        "auroc_macro": 0.7521505951881409
+      },
+      "fast": {
+        "macro_f1": 0.42208510637283325
+      },
+      "slow": {
+        "macro_f1": 0.5482695698738098
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9771943092346191,
+        "DoS Hulk": 0.6285714507102966,
+        "PortScan": 0.52173912525177,
+        "DDoS": 0.4178082048892975,
+        "DoS GoldenEye": 0.24242424964904785,
+        "FTP-Patator": 0.04800000041723251,
+        "SSH-Patator": 0.049504950642585754,
+        "DoS slowloris": 0.85537189245224,
+        "DoS Slowhttptest": 0.131386861205101,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9821073412895203
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.8966262936592102,
+        "DoS Hulk": 0.9016500115394592,
+        "PortScan": 0.9544225931167603,
+        "DDoS": 0.9963520765304565,
+        "DoS GoldenEye": 0.9591012597084045,
+        "FTP-Patator": 0.8734793663024902,
+        "SSH-Patator": 0.8863012790679932,
+        "DoS slowloris": 0.9948273301124573,
+        "DoS Slowhttptest": 0.903834342956543,
+        "Bot": 0.4114537537097931,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9999092817306519
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "dim2_c4",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260510_091547/m5_10_c4_videomae_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.4691171646118164,
+        "accuracy": 0.9511456489562988,
+        "auroc_macro": 0.7591718435287476
+      },
+      "fast": {
+        "macro_f1": 0.43866515159606934
+      },
+      "slow": {
+        "macro_f1": 0.6401126980781555
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9754834175109863,
+        "DoS Hulk": 0.6042553186416626,
+        "PortScan": 0.47999998927116394,
+        "DDoS": 0.5230769515037537,
+        "DoS GoldenEye": 0.35555556416511536,
+        "FTP-Patator": 0.06622516363859177,
+        "SSH-Patator": 0.10833333432674408,
+        "DoS slowloris": 0.8487085103988647,
+        "DoS Slowhttptest": 0.2245989292860031,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9740518927574158
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.8909050226211548,
+        "DoS Hulk": 0.8981615304946899,
+        "PortScan": 0.9553650617599487,
+        "DDoS": 0.9908422827720642,
+        "DoS GoldenEye": 0.9629669189453125,
+        "FTP-Patator": 0.9057332277297974,
+        "SSH-Patator": 0.8452478051185608,
+        "DoS slowloris": 0.9970166087150574,
+        "DoS Slowhttptest": 0.8997612595558167,
+        "Bot": 0.5233134627342224,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9999203085899353
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "dim4_B_ms_notoken",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260510_154227/m5_10_b_videomae_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.4760362207889557,
+        "accuracy": 0.9527979493141174,
+        "auroc_macro": 0.7357800006866455
+      },
+      "fast": {
+        "macro_f1": 0.45552241802215576
+      },
+      "slow": {
+        "macro_f1": 0.5999314188957214
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9759628176689148,
+        "DoS Hulk": 0.6018518805503845,
+        "PortScan": 0.5416666865348816,
+        "DDoS": 0.6685082912445068,
+        "DoS GoldenEye": 0.261904776096344,
+        "FTP-Patator": 0.0625,
+        "SSH-Patator": 0.10196078568696976,
+        "DoS slowloris": 0.8383458852767944,
+        "DoS Slowhttptest": 0.2054794579744339,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9782178401947021
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.8766806721687317,
+        "DoS Hulk": 0.8939248919487,
+        "PortScan": 0.9657022953033447,
+        "DDoS": 0.9912140965461731,
+        "DoS GoldenEye": 0.9562609195709229,
+        "FTP-Patator": 0.8438004851341248,
+        "SSH-Patator": 0.8675124645233154,
+        "DoS slowloris": 0.9951139688491821,
+        "DoS Slowhttptest": 0.8526666164398193,
+        "Bot": 0.32235634326934814,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9999063014984131
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "dim4_C_fast_only",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260510_183624/m5_10_c_videomae_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.4340609312057495,
+        "accuracy": 0.9408460259437561,
+        "auroc_macro": 0.7579443454742432
+      },
+      "fast": {
+        "macro_f1": 0.4604450464248657
+      },
+      "slow": {
+        "macro_f1": 0.28953585028648376
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9702286124229431,
+        "DoS Hulk": 0.4926108419895172,
+        "PortScan": 0.5789473652839661,
+        "DDoS": 0.47588425874710083,
+        "DoS GoldenEye": 0.37704917788505554,
+        "FTP-Patator": 0.11249999701976776,
+        "SSH-Patator": 0.02926829271018505,
+        "DoS slowloris": 0.6765578389167786,
+        "DoS Slowhttptest": 0.1170731708407402,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9445506930351257
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.9086411595344543,
+        "DoS Hulk": 0.7878291606903076,
+        "PortScan": 0.8879528045654297,
+        "DDoS": 0.9387981295585632,
+        "DoS GoldenEye": 0.9479985237121582,
+        "FTP-Patator": 0.8730155229568481,
+        "SSH-Patator": 0.9221920967102051,
+        "DoS slowloris": 0.9928261041641235,
+        "DoS Slowhttptest": 0.9226604104042053,
+        "Bot": 0.6714524626731873,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9999099373817444
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "dim4_D_slow_only",
+      "paradigm": "video",
+      "eval_bundle": "outputs/run_20260510_201129/m5_10_d_videomae_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.24713177978992462,
+        "accuracy": 0.9159506559371948,
+        "auroc_macro": 0.7372591495513916
+      },
+      "fast": {
+        "macro_f1": 0.16826897859573364
+      },
+      "slow": {
+        "macro_f1": 0.5637497305870056
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9572989344596863,
+        "DoS Hulk": 0.38372093439102173,
+        "PortScan": 0.19354838132858276,
+        "DDoS": 0.141263946890831,
+        "DoS GoldenEye": 0.0,
+        "FTP-Patator": 0.17171716690063477,
+        "SSH-Patator": 0.23426572978496552,
+        "DoS slowloris": 0.43888887763023376,
+        "DoS Slowhttptest": 0.03478260710835457,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.16296295821666718
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.8175069689750671,
+        "DoS Hulk": 0.8801859617233276,
+        "PortScan": 0.9410097599029541,
+        "DDoS": 0.967029869556427,
+        "DoS GoldenEye": 0.769284188747406,
+        "FTP-Patator": 0.8888357877731323,
+        "SSH-Patator": 0.9260152578353882,
+        "DoS slowloris": 0.8998854160308838,
+        "DoS Slowhttptest": 0.8385400176048279,
+        "Bot": 0.6930665969848633,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.9630087614059448
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "m6.2_rf",
+      "paradigm": "flow",
+      "eval_bundle": "outputs/m6_rf/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.1793226652030851,
+        "accuracy": 0.9328045825071601,
+        "auroc_macro": 0.579164568332302
+      },
+      "fast": {
+        "macro_f1": 0.17611673180509602
+      },
+      "slow": {
+        "macro_f1": 0.20753315173673328
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.964758218267953,
+        "DoS Hulk": 0.6283987915407855,
+        "PortScan": 0.0,
+        "DDoS": 0.7193460490463215,
+        "DoS GoldenEye": 0.0,
+        "FTP-Patator": 0.0,
+        "SSH-Patator": 0.0,
+        "DoS slowloris": 0.0,
+        "DoS Slowhttptest": 0.018691588785046728,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.0
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.5852415558369544,
+        "DoS Hulk": 0.9918587810726751,
+        "PortScan": 0.49980699238998566,
+        "DDoS": 0.7892784588646985,
+        "DoS GoldenEye": 0.5,
+        "FTP-Patator": 0.5,
+        "SSH-Patator": 0.5,
+        "DoS slowloris": 0.5,
+        "DoS Slowhttptest": 0.5046244634910083,
+        "Bot": 0.5,
+        "Web Attack": null,
+        "Infiltration": null,
+        "Heartbleed": 0.5
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "m6.2_xgb",
+      "paradigm": "flow",
+      "eval_bundle": "outputs/m6_xgb/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.11654141221280606,
+        "accuracy": 0.9264705882352942,
+        "auroc_macro": 0.5135597319648881
+      },
+      "fast": {
+        "macro_f1": 0.11441271230744915
+      },
+      "slow": {
+        "macro_f1": 0.1334708389674036
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9616786749720125,
+        "DoS Hulk": 0.5533596837944664,
+        "PortScan": 0.0,
+        "DDoS": 0.0,
+        "DoS GoldenEye": 0.0,
+        "FTP-Patator": 0.0,
+        "SSH-Patator": 0.0,
+        "DoS slowloris": 0.0,
+        "DoS Slowhttptest": 0.0,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.0
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.4852499652629806,
+        "DoS Hulk": 0.7082802430151608,
+        "PortScan": 0.6254900388020493,
+        "DDoS": 0.7688367994394734,
+        "DoS GoldenEye": 0.4717433943802971,
+        "FTP-Patator": 0.5557304285374756,
+        "SSH-Patator": 0.5486245004647763,
+        "DoS slowloris": 0.40422914168512764,
+        "DoS Slowhttptest": 0.22805200081251267,
+        "Bot": 0.47227733686067025,
+        "Web Attack": null,
+        "Infiltration": null,
+        "Heartbleed": 0.3806432023532464
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "m6.3_in",
+      "paradigm": "2d_snapshot",
+      "eval_bundle": "outputs/run_20260514_084832/m6_3_in_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.20613345503807068,
+        "accuracy": 0.9236615896224976,
+        "auroc_macro": 0.5670560002326965
+      },
+      "fast": {
+        "macro_f1": 0.1683029979467392
+      },
+      "slow": {
+        "macro_f1": 0.3962180018424988
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.9616420269012451,
+        "DoS Hulk": 0.19834710657596588,
+        "PortScan": 0.3125,
+        "DDoS": 0.2766570746898651,
+        "DoS GoldenEye": 0.0,
+        "FTP-Patator": 0.05309734493494034,
+        "SSH-Patator": 0.0220994483679533,
+        "DoS slowloris": 0.18243242800235748,
+        "DoS Slowhttptest": 0.0,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.2606924772262573
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.655903697013855,
+        "DoS Hulk": 0.7120724320411682,
+        "PortScan": 0.5464308857917786,
+        "DDoS": 0.8619112372398376,
+        "DoS GoldenEye": 0.7564003467559814,
+        "FTP-Patator": 0.5976498126983643,
+        "SSH-Patator": 0.6926009058952332,
+        "DoS slowloris": 0.815116286277771,
+        "DoS Slowhttptest": 0.6266680955886841,
+        "Bot": 0.3479616641998291,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.759013295173645
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "m6.3_rn",
+      "paradigm": "2d_snapshot",
+      "eval_bundle": "outputs/run_20260514_103615/m6_3_rn_eval/eval_metrics.json",
+      "val_sample_count_total": 18156,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 1693,
+      "combined": {
+        "macro_f1": 0.20966732501983643,
+        "accuracy": 0.8834545016288757,
+        "auroc_macro": 0.5721969604492188
+      },
+      "fast": {
+        "macro_f1": 0.17339374125003815
+      },
+      "slow": {
+        "macro_f1": 0.39151594042778015
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.939751148223877,
+        "DoS Hulk": 0.32116788625717163,
+        "PortScan": 0.13793103396892548,
+        "DDoS": 0.2892307639122009,
+        "DoS GoldenEye": 0.0,
+        "FTP-Patator": 0.13636364042758942,
+        "SSH-Patator": 0.07000000029802322,
+        "DoS slowloris": 0.2822085916996002,
+        "DoS Slowhttptest": 0.0,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.12968750298023224
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.6679409742355347,
+        "DoS Hulk": 0.7542333602905273,
+        "PortScan": 0.541693389415741,
+        "DDoS": 0.8598831295967102,
+        "DoS GoldenEye": 0.7898695468902588,
+        "FTP-Patator": 0.5675618648529053,
+        "SSH-Patator": 0.7214024066925049,
+        "DoS slowloris": 0.8466586470603943,
+        "DoS Slowhttptest": 0.6444674730300903,
+        "Bot": 0.28280240297317505,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.7620468139648438
+      },
+      "per_class_n": {
+        "BENIGN": 16829,
+        "DoS Hulk": 105,
+        "PortScan": 22,
+        "DDoS": 228,
+        "DoS GoldenEye": 61,
+        "FTP-Patator": 107,
+        "SSH-Patator": 175,
+        "DoS slowloris": 264,
+        "DoS Slowhttptest": 105,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 248
+      }
+    },
+    {
+      "cell": "m6_1_byte_transformer",
+      "paradigm": "1D byte-sequence",
+      "eval_bundle": "outputs/run_20260516_090240/m6_1_byte_transformer_eval/eval_metrics.json",
+      "val_sample_count_total": 32926,
+      "val_sample_count_fast": 16463,
+      "val_sample_count_slow": 16463,
+      "combined": {
+        "macro_f1": 0.2444497048854828,
+        "accuracy": 0.9065783619880676,
+        "auroc_macro": 0.6185499429702759
+      },
+      "fast": {
+        "macro_f1": 0.2444497048854828
+      },
+      "slow": {
+        "macro_f1": 0.2444497048854828
+      },
+      "per_class_combined_f1": {
+        "BENIGN": 0.95952308177948,
+        "DoS Hulk": 0.3093525171279907,
+        "PortScan": 0.0,
+        "DDoS": 0.07441860437393188,
+        "DoS GoldenEye": 0.05042016878724098,
+        "FTP-Patator": 0.0,
+        "SSH-Patator": 0.0,
+        "DoS slowloris": 0.8215962648391724,
+        "DoS Slowhttptest": 0.23693379759788513,
+        "Bot": 0.0,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.23670212924480438
+      },
+      "per_class_combined_auroc": {
+        "BENIGN": 0.8145512938499451,
+        "DoS Hulk": 0.8446571826934814,
+        "PortScan": 0.6611958146095276,
+        "DDoS": 0.7884591221809387,
+        "DoS GoldenEye": 0.6528799533843994,
+        "FTP-Patator": 0.6468002200126648,
+        "SSH-Patator": 0.3512548804283142,
+        "DoS slowloris": 0.9392573833465576,
+        "DoS Slowhttptest": 0.7778049111366272,
+        "Bot": 0.7402219772338867,
+        "Web Attack": 0.0,
+        "Infiltration": 0.0,
+        "Heartbleed": 0.824066162109375
+      },
+      "per_class_n": {
+        "BENIGN": 30618,
+        "DoS Hulk": 176,
+        "PortScan": 32,
+        "DDoS": 412,
+        "DoS GoldenEye": 110,
+        "FTP-Patator": 174,
+        "SSH-Patator": 278,
+        "DoS slowloris": 478,
+        "DoS Slowhttptest": 186,
+        "Bot": 12,
+        "Web Attack": 0,
+        "Infiltration": 0,
+        "Heartbleed": 450
+      },
+      "cell_id": "m6_1_byte_transformer",
+      "model": "ByteTransformer (6L, d=256, nhead=8, SDPA)",
+      "init": "random",
+      "stream": "fast-only",
+      "head_lr_multiplier": 1.0,
+      "grad_steps": 24260,
+      "commit": "aae6df3",
+      "run_dir": "outputs/run_20260516_090240",
+      "canonical_fast_macro_f1": 0.2444497048854828,
+      "canonical_val_n_fast": 16463,
+      "baseline_rerun_artefact_note": "fast shards passed to both --shard-pattern-fast and --shard-pattern-slow flags due to baseline_rerun.py mandatory dual-stream input; val_sample_count_total = 32,926 in eval bundle is doubled artefact (= 16,463 fast x 2); canonical M6.1 metric is fast_macro_f1 = 0.2444 with val_n_fast = 16,463 (same as combined and slow numerically because same shards passed twice); per-class n values in eval bundle similarly doubled but F1 / AUROC ratio is invariant under doubling; baseline_rerun.py fast-only paradigm extension (allow empty --shard-pattern-slow) deferred to future infrastructure work, out of scope for this Phase 1."
+    }
+  ],
+  "hierarchy_summary": {
+    "12_cell_hierarchy_ranges": {
+      "video_excluding_undertrain_outlier": {
+        "min": 0.4341,
+        "max": 0.5197,
+        "min_cell": "m5_10_dim4_cell_c_fast_only",
+        "max_cell": "m5_5_r2plus1d_18"
+      },
+      "1d_byte": {
+        "value": 0.2444,
+        "cell": "m6_1_byte_transformer"
+      },
+      "2d_snapshot": {
+        "min": 0.2061,
+        "max": 0.2097,
+        "min_cell": "m6_3_in_resnet18",
+        "max_cell": "m6_3_rn_resnet18"
+      },
+      "flow_feature": {
+        "min": 0.1165,
+        "max": 0.1793,
+        "min_cell": "m6_2_xgboost",
+        "max_cell": "m6_2_rf"
+      },
+      "outlier_dim4_cell_d_undertrain": {
+        "value": 0.2471,
+        "note": "video slow-only with 2,420 grad_steps (20x under-trained vs 48,530 contract); excluded from hierarchy range computation"
+      }
+    }
+  },
+  "finding_refinement_notes": [
+    {
+      "finding_id": "M6-004",
+      "note": "Original M6-004 hierarchy 'video > 2D > flow' refined by M6-008 12-cell update including 1D byte paradigm: video > 1D byte > 2D > flow (M6.1 1D byte 0.2444 falls between video lower bound 0.4341 and 2D snap upper bound 0.2097). See Findings.md M6-008."
+    },
+    {
+      "finding_id": "M6-006",
+      "note": "Original M6-006 'Bot AUROC preservation video-only' partially overturned by M6-012: 1D byte paradigm Bot AUROC = 0.7402 > video top TimeSformer R1 0.7151. Refined scope: Bot AUROC preserved in video + 1D byte paradigms; argmax F1 = 0 paradigm-uniform due to Bot val n = 12 statistical edge. See Findings.md M6-012."
+    }
+  ]
+}
