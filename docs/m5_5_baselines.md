@@ -177,13 +177,23 @@ divided space-time TimeSformer-S also beats main on slow (0.6254,
 factorisation in some form" rather than specifically "3D conv" or
 "divided attention".
 
-ConvLSTM's slow-stream weakness is the inverse pattern. The recurrent
-inductive bias may favour short-burst (fast-stream) patterns over
-long-tempo ones — possibly because the recurrence's effective memory
-horizon saturates before the 1s slow-stream window unfolds; or because
-the 2×2 spatial pool between cells (a memory-budget concession; see
-`convlstm_nid.py` docstring) discards low-frequency spatial signal
-that the slow stream relies on.
+ConvLSTM's slow-stream weakness is the inverse pattern and is
+**load-bearing empirical evidence** for the paradigm critique in
+Idea.md §2.2.2 (N+2 closeout reframe). ConvLSTM scores slow macro_f1
+0.5542 vs fast 0.4530 — Δ −0.101 against the other 5 baselines'
+slow > fast direction. Mechanism: LSTM time-dimension modelling
+assumes a short-range adjacent-frame causal chain; at the slow
+stream's 1s frame interval the packet-level causality between
+adjacent frames has largely decayed, so the LSTM time dimension is
+underutilized — vs the fast stream's 100ms interval where causal
+signal between frames is preserved. The 2×2 spatial pool between
+cells (a memory-budget concession; see `convlstm_nid.py` docstring)
+plausibly compounds the loss by discarding low-frequency spatial
+signal that the slow stream relies on, but the temporal-modelling
+assumption is the dominant mechanism. This is the empirical anchor
+for Idea.md §2.2.2 "2D + LSTM 把时间当外挂索引 (non-native time
+treatment)" critique: LSTM is suited to short-range causal chains,
+not to NID slow-stream 1s sparse causality.
 
 ### 3. Bot rare-class collapse is architecture-dependent, not pure data imbalance
 
@@ -204,12 +214,20 @@ a) The focal+α intervention works noticeably better when the backbone
    that head_lr is not the only knob; the multiplier interacts with
    architecture.
 
-b) R(2+1)D-18 is the only baseline with non-zero Bot F1 (0.143). It
-   correctly classified 1 of 12 Bot samples — a recall-side breakthrough
-   at low support, not a discriminative signal lift (Bot AUROC 0.4994
-   ≈ random). At n=12 a single sample contributes 0.083 to recall, so
-   this gain is on the edge of statistical significance; it would need
-   a larger Bot test set to interpret as architecture-level evidence.
+b) R(2+1)D-18 is the only baseline sustaining Bot F1 > 0 across all
+   10 epochs (run-average 0.1404, epoch 0 peak 0.2000, final epoch
+   0.1429 — N+2 closeout refinement). TimeSformer R1 reaches
+   final-epoch Bot F1 = 0.0909 (non-zero but not sustained across the
+   trajectory). The other 4 baselines (M5.4 P2 main / M5.5 C3D-Small
+   / ConvLSTM / I3D) hold Bot F1 = 0 at most epochs (detailed
+   trajectories in per_epoch.json; see Findings.md M5-007 sub(a)
+   revised text for the cross-baseline summary). R(2+1)D-18's
+   sustained Bot F1 reflects 1–2 of 12 Bot samples correctly
+   classified per epoch — a recall-side breakthrough at low support
+   (Bot AUROC 0.4994 ≈ random), not a discriminative-signal lift. At
+   n=12 a single sample contributes 0.083 to recall, so the gain is
+   on the edge of statistical significance; a larger Bot test set
+   would be required to interpret this as architecture-level evidence.
 
 ### 4. C3D-Small is the weakest baseline despite matched param scale
 

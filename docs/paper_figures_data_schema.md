@@ -82,7 +82,7 @@ so individual figure scripts can't drift.
 - **Selected classes**: Bot (n=12), DoS GoldenEye (n=61), PortScan (n=22), DDoS (n=228), SSH-Patator (n=175), Heartbleed (n=248) — chosen to span the support range from extreme-rare to high-support.
 - **Data path**: 6 classes × 6 baselines × 10 epochs × ``per_class_f1``.
 - **Type**: 6-panel grid (one panel per class, 2×3), 6 lines per panel. Reveals that:
-  - Bot F1 is non-zero in only R1, R1.5, P2 (early epochs), I3D (early), and **sustained in R(2+1)D-18 only**
+  - Bot F1 sustained > 0 across all 10 epochs only in R(2+1)D-18 (run-average 0.1404, epoch 0 peak 0.2000); TimeSformer R1 final-epoch Bot F1 = 0.0909 non-zero but not sustained; M5.4 P2 / C3D-Small / ConvLSTM / I3D occasionally non-zero at specific epochs (per-cell trajectory inspection per figure render).
   - GoldenEye F1 oscillates in all 6 runs (the noisy-attractor finding documented across 8/8 retrofits)
   - DDoS F1 plateau-then-jump pattern visible in C3D / ConvLSTM (random-init), gradual climb in I3D / R(2+1)D-18 (K400), sustained climb in TimeSformer-S R1, late jump in M5.4 P2.
 - **Findings**: M5-004, M5-007 (Bot F1 sub-finding), M5-002 (Bot per-class)

@@ -273,11 +273,30 @@ closeout Findings batch; no Findings.md edits this round per spec):
   shape=(384, 3, 2, 8, 8) norm=5.22; ch[3:6] kaiming-init
   shape=(384, 3, 2, 8, 8) norm=27.78` — the SSv2-derived
   trilinear-downsampled first 3 channels match the Phase 0 sanity
-  norm of 5.22 (vs K400 main's 3.83 — different source ckpt
-  produces different downsampled-norm values, K400 having compressed
-  3-ch weights to a smaller magnitude during 16→8 downsample).
+  norm of 5.22 (vs K400 main's corrected norm 5.24 — within 0.4% of
+  each other, indicating the trilinear-downsample operation produces
+  magnitude-comparable outputs across the two pretrained sources).
+  The asymmetric NID transfer behaviour observed in the round 1
+  headline (K400 +0.037 combined vs SSv2 +0.003 within noise) is
+  therefore NOT attributable to a downsample-magnitude discrepancy
+  — both sources arrive at the project tube_patch with near-identical
+  channel-norm preservation. The asymmetric transfer must be located
+  in other mechanisms (corpus semantic content / training objective
+  / motion-vocabulary alignment); Idea.md §2.2.3 v2 narrative
+  explicit limits the claim to "K400 transfer ≠ SSv2 transfer;
+  corpus 选择 active mechanism 而非 video modality 通用属性".
   Combined macro_f1 0.4413 ≠ K400's 0.4756 and ≠ random's 0.4386,
-  rules out silent load of either source.
+  rules out silent load of either source (downstream macro_f1
+  discrimination remains the load-bearing silent-load sanity even
+  though the norm-magnitude check is now indistinguishable between
+  K400 and SSv2 sources). N+2 closeout correction: prior text cited
+  K400 norm = 3.83, sourced from a `--pretrained=""` (random init)
+  re-eval log rather than the K400 training startup adapter log;
+  the correct K400-derived ch[0:3] norm at project (2, 8, 8) target
+  tube_patch is 5.24 (deterministic via
+  `adapt_conv3d_to_6ch(K400_pretrained_proj, target=(2,8,8),
+  n_extra=3)` offline reproduction; verified in dim 4 commit
+  `424d066` forensic note and re-verified in N+2 P3 commit).
 - **Two-dir consolidation note**: Phase 2 was launched with a manual
   `tee outputs/run_<ts>/training.log` redirect into a manually-created
   run dir `run_20260508_213308`, but the python Trainer chose its

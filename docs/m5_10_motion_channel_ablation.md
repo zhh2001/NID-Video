@@ -223,11 +223,16 @@ un-downsampled source.
 
 Phase 0 silent-load checks at startup (recorded in the trainer log):
 - patch_embed adapter log: `ch[0:3] downsampled 16→8 shape=(384, 3, 2, 8, 8)
-  norm=3.85; ch[3:4] kaiming-init shape=(384, 1, 2, 8, 8) norm=27.68`.
-  K400-derived first-3-channel norm 3.85 matches K400 main P2's
-  3.83 within rounding (same source ckpt, same downsample target);
-  Kaiming-init extra channel norm 27.68 confirms a single fresh ch4.
-- norm-ratio sanity: 27.68 / 3.85 ≈ 7.2× — well above the M3-001 PASS
+  norm=5.24; ch[3:4] kaiming-init shape=(384, 1, 2, 8, 8) norm=27.68`.
+  K400-derived first-3-channel norm 5.24 matches K400 main P2's
+  corrected norm 5.24 verbatim (same source ckpt, same downsample
+  target; deterministic offline reproduction via
+  `adapt_conv3d_to_6ch(K400_pretrained_proj, target=(2,8,8))` —
+  N+2 closeout correction, prior text cited 3.85 / 3.83 sourced from
+  a `--pretrained=""` random-init re-eval log rather than the K400
+  training startup adapter log); Kaiming-init extra channel norm
+  27.68 confirms a single fresh ch4.
+- norm-ratio sanity: 27.68 / 5.24 ≈ 5.28× — well above the M3-001 PASS
   bar of 1.5×, confirming pretrained signal preservation at C=4.
 - val_n=18,156 in epoch 0 ✓; matches both dim 1 cells and K400 main.
 
