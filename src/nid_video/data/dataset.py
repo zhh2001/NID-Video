@@ -36,8 +36,17 @@ def num_classes(mode: LabelMode) -> int:
 
 
 def _to_torch_sample(sample: dict, label_mode: LabelMode) -> dict:
-    """Convert a webdataset-decoded sample dict into our training format."""
-    arr = sample["tensor.npy"]
+    """Convert a webdataset-decoded sample dict into our training format.
+
+    Supports two shard schemas (selected by which payload key is present):
+
+    * **v2 video shards** — ``tensor.npy`` (T, C, H, W) float32. Default
+      path used by all M3-M5 + M6.3 cells.
+    * **M6.1 byte shards** — ``bytes.npy`` (K, N) uint8 + ``mask.npy``
+      (K, N) uint8. Converted to int64 token-id tensor (K, N) with the
+      PAD token id (256) substituted at positions where mask == 0.
+      Matches ``ByteTransformerForNID.forward`` input contract.
+    """
     raw_label = int(sample["label.cls"])
     if label_mode == "collapsed13":
         label = collapse_to_13(raw_label)
@@ -46,7 +55,24 @@ def _to_torch_sample(sample: dict, label_mode: LabelMode) -> dict:
     else:
         raise ValueError(f"unknown label_mode: {label_mode}")
 
-    tensor = torch.from_numpy(arr).contiguous()
+    if "tensor.npy" in sample:
+        arr = sample["tensor.npy"]
+        tensor = torch.from_numpy(arr).contiguous()
+    elif "bytes.npy" in sample and "mask.npy" in sample:
+        # M6.1 byte shard path. Apply PAD where mask==0.
+        from nid_video.baselines.byte_transformer import PAD_TOKEN_ID
+        bytes_arr = sample["bytes.npy"]           # (K, N) uint8
+        mask_arr = sample["mask.npy"]             # (K, N) uint8 (1=real, 0=pad)
+        tokens = torch.from_numpy(bytes_arr.astype("int64")).contiguous()
+        mask = torch.from_numpy(mask_arr.astype(bool)).contiguous()
+        tokens.masked_fill_(~mask, PAD_TOKEN_ID)
+        tensor = tokens
+    else:
+        raise KeyError(
+            "shard sample has neither 'tensor.npy' nor ('bytes.npy' + "
+            f"'mask.npy'); keys = {sorted(sample.keys())}"
+        )
+
     return {
         "tensor": tensor,
         "label": torch.tensor(label, dtype=torch.long),

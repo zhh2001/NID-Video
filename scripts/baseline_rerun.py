@@ -97,7 +97,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model",
                    choices=["videomae_small", "timesformer_small", "c3d_small",
                             "i3d", "r2plus1d_18", "convlstm",
-                            "resnet18_snapshot"],
+                            "resnet18_snapshot", "byte_transformer"],
                    default="videomae_small",
                    help="Backbone selector — must match what the source training "
                         "run used. Default keeps the M3-onward main method; M5.5 "
@@ -214,6 +214,16 @@ def _build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
             num_classes=n_classes,
             pretrained=False,
             in_channels=cfg.data.num_channels,
+            gradient_checkpointing=False,
+        )
+    if name == "byte_transformer":
+        from nid_video.baselines.byte_transformer import ByteTransformerForNID
+        # M6.1 — at re-eval time weights load from --resume; build shell
+        # with gradient_checkpointing=False (eval doesn't backward,
+        # checkpointing is no-op during eval but skip the wrapper for
+        # cleanliness).
+        return ByteTransformerForNID(
+            num_classes=n_classes,
             gradient_checkpointing=False,
         )
     raise SystemExit(f"--model {name!r} not yet implemented")

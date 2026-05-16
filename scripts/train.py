@@ -180,7 +180,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model",
                    choices=["videomae_small", "timesformer_small", "c3d_small",
                             "i3d", "r2plus1d_18", "convlstm",
-                            "resnet18_snapshot"],
+                            "resnet18_snapshot", "byte_transformer"],
                    default="videomae_small",
                    help="Backbone selector (M5.5). Default keeps the M3-onward "
                         "main method. Baselines build the same forward "
@@ -356,6 +356,18 @@ def _build_model(args, cfg, training_cfg, n_classes: int, pretrained: str | None
             pretrained=pretrained,
             in_channels=cfg.data.num_channels,
             gradient_checkpointing=False,
+        )
+    if name == "byte_transformer":
+        from nid_video.baselines.byte_transformer import ByteTransformerForNID
+        # M6.1 1D byte Transformer — 6-layer SDPA encoder over K=16
+        # packets × N=128 bytes (vocab 257 = bytes 0-255 + [PAD]=256).
+        # Random-init only (Path B random group; no public pretrained
+        # 1D byte encoder for NID). ``--pretrained`` silently ignored.
+        # gradient_checkpointing=True per Phase 0 §I — peak GPU 4.7 GB
+        # without checkpointing on B=32 seqlen=2048 backward; ~1.4 GB with.
+        return ByteTransformerForNID(
+            num_classes=n_classes,
+            gradient_checkpointing=True,
         )
     raise SystemExit(
         f"--model {name!r} not yet implemented in M5.5"
