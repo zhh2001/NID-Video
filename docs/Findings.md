@@ -772,6 +772,8 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
   - **M5.1 3ep**: combined 0.4230 / Bot AUROC 0.4237（已 step-collapse）
   - **M5.2 10ep**: combined 0.4677 / Bot AUROC 0.4077（vanilla CE 真实 ceiling）
   Bot AUROC 在 epoch 1 → 3 之间发生 step-collapse（−0.30），不是 gradual decay；epoch 3 → 10 仅 −0.016。Implication: focal/class-reweight 干预若放在 epoch 3 后启动只能 "correct" 已塌缩的 logit calibration（无法恢复 representation），必须从 epoch 0 即介入"prevent"塌缩。
+- **Discovery additional**(N+2 closeout 修订):Bot AUROC collapse 形态 run-to-run 间不同 — M5.1 是 epoch 1→3 间 sharp drop(0.7247 → 0.4237);M5.2 是 6-epoch gradual decline(epoch 0 = 0.6728 → epoch 9 = 0.4077);dim 1 random Phase 1 trajectory **不 collapse**(全程 sustained > 0.66 across all 10 epochs)= reverse evidence。Collapse 形态非 constant,具体形态依 representation × loss × training-stream 联合;原 "M5.1 单步 sharp drop" 描述是 1 个 instance 而非 generic claim。
+- **Evidence additional**:`outputs/run_20260501_162117/metrics/per_epoch.json`(M5.2 retrofit 全程 trajectory)+ `outputs/run_20260507_205921/metrics/per_epoch.json`(dim 1 random Phase 1 sustained > 0.66 reverse evidence)。
 - **Evidence**: `outputs/run_20260430_223105/m4_8_rerun/eval_metrics.json` + `outputs/run_20260501_143946/m5_1_rerun/eval_metrics.json` + `outputs/run_20260501_162117/m5_3_rerun/eval_metrics.json` + `docs/m5_baseline_trajectory.md` §"Bot AUROC trajectory"; commits `266d56c`（generalize baseline_rerun.py + retrofit M4.8/M5.1）+ `0b79ca0`（focal loss + M5.4 P1）
 - **Decision rationale**: 三 ckpt 数字本身一直存在；M5.3.5 把它们 normalised 到 no_cycle eval 才能比较。Step-collapse 物理含义直接驱动 M5.4 from-scratch focal-loss 路径决策。
 - **Status**: documented in `docs/m5_baseline_trajectory.md`; M5.4 路径选择的 root cause anchor
@@ -781,6 +783,7 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 > - **Use**: vanilla CE 在严重不平衡 NIDS 下的 representation collapse 实证。三 ckpt noise-free macro_f1 trajectory (M4.8 0.3324 / M5.1 0.4230 / M5.2 0.4677) 证明 vanilla CE ceiling 在 epoch 3 已基本撞死,长训仅多涨 +0.045。Bot AUROC 阶跃 collapse (epoch 1→3 跌 0.301,epoch 3→10 仅再跌 0.016) 证明 representation 退化集中在 critical window epoch 1-3,"focal loss 必须 from epoch 0 介入 prevent 而非 correct" 的物理直觉得以确立。这条直接驱动 M5.4 from-scratch 路径选择 (不 fine-tune from M5.2 ckpt)。
 > - **Risk if missed**: 不写则 M5.4 from-scratch 设计选择像 ad-hoc 决定。论文 Methods 章节对 "为什么 focal 从 scratch 而不是 fine-tune from collapsed ckpt" 缺乏实证理由。
 > - **Cross-link**: M5-003 (noise-free eval 是这条 finding 的 measurement prerequisite);M5-004 (focal loss 设计的下游响应);M4-010b (single-epoch limitation 的多 epoch 升级版)。
+> - **Updated (N+2 closeout)**: collapse 形态 not constant,具体形态依 representation × loss × training-stream 联合;论文 narrative 限定 "M5.1 trajectory shows step-collapse" 而非 "Bot AUROC collapse is step-shape generic"。
 > - **Priority**: HIGHEST
 
 ### Finding M5-003: no_cycle eval strategy + cycling-induced metric inflation maturity-dependent
@@ -806,6 +809,8 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 
 - **Context**: M5.4 Phase 1（focal γ=2 from-scratch）+ Phase 2（+ inverse_sqrt α + head_lr ×5）+ 决策接受 P2 作 baselines fairness contract anchor。
 - **Discovery**: Phase 1 焦点损失单独使用 → noise-free combined 0.4584（**低于** vanilla CE ceiling 0.4677 by −0.009）；4/4 sentinels（Bot/GoldenEye/PortScan/SSH-Patator）FAIL；Bot per-class AUROC 0.5060。Phase 2 加上 inverse_sqrt class-frequency reweight + head LR ×5 → noise-free combined **0.4756**（+0.0079 over CE，+0.0172 over Phase 1）；4/4 sentinels 仍 FAIL；Bot AUROC 0.4968。中等稀疏 class（n_train > 200）reweighting 单调改进（GoldenEye F1 0.2278 → 0.4130；PortScan F1 0.5957）；极稀疏（n_train < 50）loss-level 不可救（Bot F1 仍 0.0；Web Attack/Infiltration n_val=0 by construction）。
+- **Discovery additional**(N+2 closeout 修订):round 1 期间 dim 1+2+4 共 8 forward cells(dim 1 random + dim 1 SSv2 + dim 2 C=4 + dim 4 Cell A/B/C/D + 主方法 P2 reuse)GoldenEye F1 trajectory 全部 oscillate(magnitude [0.06, 0.44] between epochs);α reweight 抬高 attractor mean 但 oscillation universally present。8/8 retrofits + forward 全 confirm noisy-attractor pattern(α 非消除 lever)。
+- **Evidence additional**:8 cells per_epoch.json GoldenEye F1 trajectory(详 `docs/m5_10_pretrained_ablation.md` + `docs/m5_10_motion_channel_ablation.md` + `docs/m5_10_scale_token_ablation.md` Phase 1 notable trajectory features 段)。
 - **Evidence**: `outputs/run_20260502_134735/m5_4_eval/eval_metrics.json`（P1）+ `outputs/run_20260502_184512/m5_4_phase2_eval/eval_metrics.json`（P2）+ `docs/m5_baseline_trajectory.md` §"M5.4 Phase 1" / §"M5.4 Phase 2"; commits `0b79ca0`（focal loss + P1）+ `8ebd3c8`（inverse_sqrt + head_lr + P2）+ `1d1a61e`（accept P2 + 推 M5.10 数据级 intervention）
 - **Decision rationale**: M5.4 任务 spec — 评估 loss-level 单独是否能突破 vanilla CE ceiling + 救稀疏 class；结论 "yes by 0.008 combined, no for 4/4 sentinels"；data-level intervention（rare-class oversampling）推 M5.10 ablation；M5.4 P2 接受作为 M5.5 baselines 的 fairness contract anchor。
 - **Status**: documented in `docs/m5_baseline_trajectory.md`; **M5.5 baselines contract anchor**
@@ -815,6 +820,7 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 > - **Use**: focal loss 在 NIDS 不平衡场景的实证 + 极稀疏类的物理边界。Phase 1 focal γ=2 from-scratch combined 0.4584 比 vanilla CE 0.4677 退步 0.009 —— focal alone 不够。Phase 2 + inverse_sqrt α + head_lr×5 拿到 0.4756 (仅 +0.0079 over CE)。物理边界:**当前架构 + 训练规模下 class reweighting 临界 sample size 在 n_train ~100-200 之间** —— GoldenEye n=257 单调修复 (0.2278→0.4130),Bot n=30 不可救 (F1=0 across all configs)。论文 Limitations 章节诚实声明 "loss-level fix 对极端稀疏 (n<50) 类不够,需要 data-level 干预";M5.10 ablation 章节将做 data-level 对照。
 > - **Risk if missed**: Reviewer 看到主方法 macro_f1 < 0.50 → 质疑 "loss 设计是不是没做好"。本条把 Phase 1+2 的实证 + 物理边界 + 后续 ablation 路径锁定,将 "M5.4 P2 不达 0.55" 从 limitation 框定为 "loss-level fix 的物理上限"。
 > - **Cross-link**: M5-002 (vanilla CE ceiling 是 P2 比较的对照);M5-005 (head_lr×5 在 K400 上有效是 Phase 2 lever 的 K400-side 实证);M2-008 / M4-003 / M4-010b (极稀疏类的 "诚实数据处理" 叙事簇)。
+> - **Updated (N+2 closeout)**: 8 forward cells(round 1)+ 11 retrofits = 19 cells GoldenEye F1 oscillation universal;α reweight 不消除 oscillation,只抬高 attractor mean。
 > - **Priority**: HIGH
 
 ### Finding M5-005: head_lr × pretrained-status 耦合 — Path B fairness contract（R1 vs R1.5 ablation 实证）
@@ -865,9 +871,10 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 
 > 🎯 **论文价值标注**
 > - **Section**: Results (Cross-baseline Table 1) + Discussion (Architecture × Pretraining decomposition)
-> - **Use**: **论文 Table 1 候选**。6 行 cross-baseline 表 (主方法 P2 + 5 baselines) 含 combined / fast / slow macro_f1 + Bot F1+AUROC + params + wall time + pretrained 状态。Group-level finding:K400 pretrained group 平均 0.5034 vs random init group 0.4682 = +0.035 gap;within-group spread > group gap (K400: 主方法 0.4756 → R(2+1)D 0.5197 = +0.044;random: C3D 0.4464 → TimeSformer 0.4836 = +0.037) → **architecture choice 的影响量级与 pretraining 相当**。Sub-findings: (a) R(2+1)D-18 唯一 Bot F1 > 0 (0.1429) —— (2+1)D 分解归纳偏置对极稀疏类更稳;(b) TimeSformer-S R1 唯一 Bot AUROC > 0.7 (0.7151) —— attention-based + random init + head_lr×1 三因素交互的 unique result;(c) ConvLSTM slow stream 反向 (0.5542 < fast 0.4530) —— LSTM 对低帧密度 (1s 间隔) 处理 degraded,对 Idea.md "2D+LSTM 把时间当外挂索引" 的批评提供实证;(d) C3D-Small 在 DDoS F1=0.3357 vs ConvLSTM 0.7886 (同 random init,C3D 19M > ConvLSTM 13M params) —— architecture > pretrained 单独贡献 for DDoS 类型。
+> - **Use**: **论文 Table 1 候选**。6 行 cross-baseline 表 (主方法 P2 + 5 baselines) 含 combined / fast / slow macro_f1 + Bot F1+AUROC + params + wall time + pretrained 状态。Group-level finding:K400 pretrained group 平均 0.5034 vs random init group 0.4682 = +0.035 gap;within-group spread > group gap (K400: 主方法 0.4756 → R(2+1)D 0.5197 = +0.044;random: C3D 0.4464 → TimeSformer 0.4836 = +0.037) → **architecture choice 的影响量级与 pretraining 相当**。Sub-findings: (a) R(2+1)D-18 唯一 baseline 在所有 10 epoch 上 Bot F1 > 0,run-average 0.1404,epoch 0 peak 0.2000;TimeSformer R1 final-epoch Bot F1 = 0.0909 非零但非 sustained;(b) TimeSformer-S R1 唯一 Bot AUROC > 0.7 (0.7151) —— attention-based + random init + head_lr×1 三因素交互的 unique result;(c) ConvLSTM slow stream 反向 (0.5542 < fast 0.4530) —— LSTM 对低帧密度 (1s 间隔) 处理 degraded,对 Idea.md "2D+LSTM 把时间当外挂索引" 的批评提供实证;(d) C3D-Small 在 DDoS F1=0.3357 vs ConvLSTM 0.7886 (同 random init,C3D 19M > ConvLSTM 13M params) —— architecture > pretrained 单独贡献 for DDoS 类型。
 > - **Risk if missed**: 不写则 M5.5 6-baseline 实测数据是 outputs/ 散落的 6 个 eval_metrics.json,论文写作时无统一 anchor。docs/m5_5_baselines.md (commit 23d76a0) 已建好统一表,本 finding 把它的论文价值显式标注。
 > - **Cross-link**: M5-002 (vanilla CE noise-free ceiling 0.4677 是所有 baselines 的对比基准);M5-005 (head_lr 分组的 fairness contract 依据);Idea.md §1.1 (主方法立意 video > 1D/2D,6 baselines 平均 0.487 > vanilla CE 0.4677 提供 video backbone 范式整体优势的实证);M2-008 / M4-003 / M4-010b (极稀疏类整体叙事簇);M3-007 / M3-008 / M3-009 / M4-010a (消费级硬件可复现叙事簇 —— baselines wall time 1.95-9.10h 全部 8GB 卡内可跑)。
+> - **Updated (N+2 closeout)**: sub-finding (a) 数字精化 — R(2+1)D-18 是 sustained Bot F1 > 0 in all 10 epochs(run-average 0.1404);TimeSformer R1 final-epoch non-zero(0.0909)但非 sustained。
 > - **Priority**: HIGHEST
 
 ### Finding M5-005 v3: Bot AUROC collapse 需要 (head_lr ×5) ∧ (multi-scale training) 双条件 jointly hold（dim 4 4-cell factorial isolation,supersedes M5-005 v2）[HIGHEST]
