@@ -1071,6 +1071,21 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 > - **Cross-link**: TRANSITION-005 / M4-001 / M4-002 / M4-010a / M5-003 / M5-006 (silent failure detection chain code-data anchor) + 本 finding (process-layer companion)
 > - **Priority**: LOW
 
+### Finding M5-019: R(2+1)D-18 K400 stem ch[0:3] norm drift +2.56 over 10 epochs — feature adaptation regime, not preservation [LOW]
+
+- **Context**: K400 pretrain transfer 是 initialization-effect 还是 feature-preservation-effect 未直接 isolate;M5-007 / M5-008 仅 anchor group-level lift + 5-epoch head start (init-time effect)。
+- **Discovery**: R(2+1)D-18 stem[0] ch[0:3] norm at K400 init = 5.2375(bit-identical to K400 torchvision source per identity-kernel regime),trained checkpoint ch[0:3] norm = 7.7927;drift = +2.56 absolute / +49% magnitude over 10 epochs。Feature adaptation regime — K400 stem features substantially evolved during NID fine-tuning。Comparable drift numbers for I3D 和 main P2 cells 未 measured(offline ckpt forensic, reproducible from saved best.pt;工作量 deferred unless specific cross-cell comparison needed)。
+- **Evidence**: K400 source `R2Plus1D_18_Weights.KINETICS400_V1`(torchvision)+ trained ckpt `outputs/run_20260504_051632/ckpt/best.pt`;offline norm computation。
+- **Status**: open finding, descriptive single-cell observation;mechanism-isolation deferred (no frozen-features baseline in M5.5 design);paper-value annotation deferred to design layer
+
+> 🎯 **论文价值标注**
+> - **Section**: Methods §3.4 K400 pretrain rationale + Discussion §6.2 K400 transfer mechanism
+> - **Use**: K400 transfer 是 **initialization-effect** 不是 feature-preservation-effect 的 explicit evidence。R(2+1)D-18 K400 stem features 在 10 epochs NID fine-tuning 期间 drift +49% magnitude, but the cell still benefits from K400 init (M5-008 = 5-epoch loss-level head start)。Combined refinement:K400 prior = starting-point inductive bias;模型 NID 上 adapt features,not preserve them。Paper §3.4 narrative 可 explicit "K400 transfer = init effect, not feature-preservation effect"。
+> - **Quote candidate**: "After 10 epochs of NID fine-tuning, R(2+1)D-18's K400-initialized stem ch[0:3] norm drifted from 5.2375 to 7.7927 (+49% magnitude), indicating K400 transfer operates as an initialization-effect rather than feature preservation. The model adapts the K400 features substantially while still benefiting from the K400 init quantified in M5-008 (5-epoch loss-level head start)."
+> - **Risk if missed**: Paper §3.4 narrative may read as "K400 features themselves help" rather than "K400 init helps";reviewer 可 question 是否 frozen-K400-features would be comparable,with no project-internal evidence to address。
+> - **Cross-link**: M5-007 / M5-008 / docs/m5_5_baselines.md "Pretrained-checkpoint asymmetry across the suite" table
+> - **Priority**: LOW
+
 ---
 
 # M6 — 实验矩阵阶段
