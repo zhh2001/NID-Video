@@ -73,6 +73,13 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 - MEDIUM: 对应章节有用素材、可选放
 - LOW: 实现细节、不预期论文出口、维护笔记
 
+### Cross-link convention
+
+> **Cross-link convention**: Cross-link fields use two modes by design:
+>
+> - **Formal list**: leading list of finding IDs forms a directional anchor graph (downstream → anchor, non-bidirectional). Separators " / " and " + " are both accepted by design (" / " for list-form references, " + " for additive / supersedes-link references). Version-suffixed references (e.g. "M5-005 v2") point to specific superseded entries and are semantically distinct from the current-version entry; they are NOT self-references. An anchor finding is referenced by multiple downstream findings without reciprocal back-links unless the anchor's own narrative materially depends on the downstream finding (hub-spoke pattern).
+> - **Narrative tail**: prose after the formal list (often with CJK separators 、 ； → etc.) may inline-reference other findings as explanatory context. These mentions are intentional prose, not formal graph edges; they do not participate in the formal cross-link graph or its audit.
+
 ---
 
 # M1 — 项目骨架阶段
@@ -1182,7 +1189,7 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 > - **Use**: 4-paradigm 矩阵 final data point。Idea.md §2.1 矩阵 close + §6.5 contribution #5 ("4 paradigm × ~12 row 跨范式 per-class signature")数据 anchor。1D byte 落在 video 与 2D 之间是 paradigm hierarchy 实证而非 hand-waving。
 > - **Quote candidate**: "The 1D byte-level Transformer achieves combined macro_f1 = 0.2444 on the fast slice (val n = 16,463) at 24,260 grad steps; under matched single-stream budget and head-lr-multiplier ×1 contract, it falls 0.19 absolute below the video fast-only counterpart (dim 4 Cell C, 0.4341) and 0.03-0.05 absolute above the 2D snapshot paradigm."
 > - **Risk if missed**: Paper §5 数据 lacuna;4-paradigm narrative 与 results 表不一致。
-> - **Cross-link**: M6-001 / M6-004 / M6-006(M6-006 partial overturn 见 M6-012)/ M6-008 全 12 cell hierarchy 数据基础。
+> - **Cross-link**: M6-001 / M6-004 / M6-006(M6-006 partial overturn 见 M6-012)。本 finding 是全 12 cell hierarchy 数据基础。
 > - **Priority**: HIGH
 
 ### Finding M6-009: M6.1 epoch-0 argmax-2-class collapse → epoch-9 7-class recovery — paradigm × training dynamics (parallels M6-001 but training-resolvable) [HIGH]
