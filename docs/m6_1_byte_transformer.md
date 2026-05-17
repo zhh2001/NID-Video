@@ -359,3 +359,75 @@ All ⚠ items resolved in design-layer N+1 session:
 
 Step 2 (code), step 3 (smoke), step 4 (commit), step 5 (final report)
 proceed in this Phase 0 turn.
+
+## Reproduction
+
+The canonical M6.1 eval artefact bundle lives at
+`outputs/run_20260516_090240/m6_1_byte_transformer_eval/`. The bundle
+contains:
+
+- `eval_metrics.json` — full metric payload (combined + per-stream),
+  schema_version=1, machine-readable.
+- `confusion_matrix.json` — combined confusion matrix; row=true,
+  col=pred; raw counts.
+- `per_class_table.csv` — combined per-class table (label_id /
+  label_name / support / precision / recall / f1 / auroc).
+- `README.md` — task label, source checkpoint, configuration,
+  per-stream table, and reproduction commands.
+
+To reproduce the full bundle (per-stream breakdown included), re-run
+`scripts/baseline_rerun.py` against the saved checkpoint:
+
+```bash
+uv run python scripts/baseline_rerun.py \
+    --resume outputs/run_20260516_090240/ckpt/best.pt \
+    --shard-pattern-fast "data/processed/cicids2017_dt100ms_v2_bytes/shards/shard-*.tar" \
+    --shard-pattern-slow "data/processed/cicids2017_dt100ms_v2_bytes/shards/shard-*.tar" \
+    --splits-path data/processed/cicids2017_dt100ms_v2/splits.parquet \
+    --output-dir outputs/run_20260516_090240/m6_1_byte_transformer_eval \
+    --task-label "M6.1 — 1D byte Transformer, 6-layer SDPA, K=16 N=128, fast-only, head_lr ×1"
+```
+
+### Dual-stream artefact note
+
+`baseline_rerun.py` enforces a dual-stream contract: both
+`--shard-pattern-fast` and `--shard-pattern-slow` are mandatory. M6.1
+is a single-stream fast-only paradigm (the byte Transformer trains on
+the fast stream only), so the workaround above passes the same fast
+shards to both flags.
+
+Consequences:
+
+- `val_sample_count_total = 32,926` (= 16,463 × 2) — the total is
+  doubled because the fast windows are loaded twice.
+- The combined / fast / slow rows of the eval bundle report identical
+  numbers (macro_f1 = 0.2444, accuracy = 0.9066, auroc_macro = 0.6185
+  in all three rows) because the predictions are identical: the same
+  data passes through the same forward pass twice.
+- Per-class supports `n` are doubled, but F1 / AUROC ratios are
+  invariant under doubling and remain the true per-class scores.
+
+### Canonical M6.1 metric
+
+The canonical M6.1 cross-paradigm metric is:
+
+- **macro_f1 = 0.2444 at val_n_fast = 16,463**
+
+This uses the same fast-only protocol as the dim 4 Cell C/D ablation
+arm, giving an apples-to-apples comparison against the video
+fast-only counterpart (dim 4 Cell C, macro_f1 = 0.4341 at 24,260
+grad steps + head_lr ×1).
+
+Caveat: do NOT read the doubled `combined` or `slow` figure from the
+eval bundle as a separate measurement; it is the same fast-slice
+number reported under a different label due to the dual-pass
+workaround.
+
+### Future infrastructure work (deferred)
+
+Extending `baseline_rerun.py` to natively accept a single-stream
+fast-only paradigm (e.g. allowing an empty `--shard-pattern-slow`)
+is deferred future infrastructure work. The current paper's results
+do not depend on it: the dual-pass workaround is forensic-preserved
+in the artefact bundle and operationally adequate for producing the
+canonical M6.1 metric.
