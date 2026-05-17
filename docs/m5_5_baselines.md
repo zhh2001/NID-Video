@@ -218,10 +218,14 @@ b) R(2+1)D-18 is the only baseline sustaining Bot F1 > 0 across all
    10 epochs (run-average 0.1404, epoch 0 peak 0.2000, final epoch
    0.1429 — N+2 closeout refinement). TimeSformer R1 reaches
    final-epoch Bot F1 = 0.0909 (non-zero but not sustained across the
-   trajectory). The other 4 baselines (M5.4 P2 main / M5.5 C3D-Small
-   / ConvLSTM / I3D) hold Bot F1 = 0 at most epochs (detailed
-   trajectories in per_epoch.json; see Findings.md M5-007 sub(a)
-   revised text for the cross-baseline summary). R(2+1)D-18's
+   trajectory). The 4 other baselines split by initialization: K400-pretrained M5.4
+   P2 main and I3D each show non-zero Bot F1 only at epochs 0-1 (peaks
+   0.1538 / 0.1429 at ep1, respectively), then collapse to F1 = 0 for
+   ep 2-9 — consistent with K400 transfer operating as an
+   initialization-effect that fine-tuning erodes (cf. Findings.md
+   M5-019 feature-level companion + M5-020 detection-level pattern).
+   Random-init C3D-Small and ConvLSTM are strict zero across all 10
+   epochs. R(2+1)D-18's
    sustained Bot F1 reflects 1–2 of 12 Bot samples correctly
    classified per epoch — a recall-side breakthrough at low support
    (Bot AUROC 0.4994 ≈ random), not a discriminative-signal lift. At
