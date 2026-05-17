@@ -1181,7 +1181,7 @@ ID 规则：`<里程碑>-<3位序号>`，例如 `M2-001`、`M3-005`、`TRANSITIO
 ### Finding M6-006: M5-005 v3 三维耦合 Bot signal preservation 仅在 video paradigm 内有效 — Bot rare-class 检测需要 temporal axis [HIGH]
 
 - **Context**: M5-005 v3 三维耦合 finding 跨 paradigm 适用性待验证。
-- **Discovery**: Bot AUROC 跨 paradigm — video dim1-random 0.6743 / TimeSformer-R1 0.7151 vs 2D snapshot M6.3.IN 0.348 / M6.3.RN 0.283 vs flow M6.2 RF 0.50 / M6.2 XGB 0.47。M5-005 v3 三维耦合(head_lr × init × multi-scale)Bot signal preservation 仅在 video paradigm 内有效;Bot rare-class 检测需要 temporal axis 非 head_lr 调度可 compensate。论文 narrative 必须 explicit 限定 finding scope。
+- **Discovery**: Bot AUROC 跨 paradigm — video dim1-random 0.6743 / TimeSformer-R1 0.7151 vs 2D snapshot M6.3.IN 0.348 / M6.3.RN 0.283 vs flow M6.2 RF 0.50 / M6.2 XGB 0.47。M5-005 v3 三维耦合(head_lr × init × multi-scale)Bot signal preservation 仅在 video paradigm 内有效;Bot rare-class 检测需要 temporal axis 非 head_lr 调度可 compensate。论文 narrative 必须 explicit 限定 finding scope。**Partial overturn M6-012**:M6.1 1D byte Bot AUROC = 0.7402 > video top TimeSformer R1 0.7151 — temporal axis 不是 strict prerequisite for ranking signal preservation;详 M6-012。
 - **Evidence**: 4 cells M6.3 + M6.2 + 6 video cells Bot AUROC table 汇总;`outputs/m6.3_cross_paradigm_summary.json` per_class_combined_auroc.Bot 字段。
 - **Status**: open finding, 10-cell Bot AUROC cross-paradigm comparison anchored;refines M5-005 v3 scope from "across regimes" to "within video paradigm";paper-value annotation deferred to design layer
 
